@@ -1,7 +1,4 @@
-# Peristaltic-Pump
-Arduino firmware for DIY Nema motor based peristaltic pump
-
-# Summary
+# SUMMARY
 There are several peristaltic pump projects on Thingiverse. However most of them lack source codes and could not be adjusted to use with different hose and bearings. I designed fully parametric peristaltic pump. It can be customized to use any silicon hose, any Nema motor, and any bearings. Source files are supplied. Feel free to modify it and adapt to suit your needs.
 
 I have used silicon hose with OD=7 mm, ID=5.5 mm, and 0.75 mm wall. With that hose Nema 17HS4401S motor was able to pump 700 ml per minute (42 litres per hour) easily. Hoses with thicker walls may require to reduce motor speed or motor with higher torque.
@@ -23,7 +20,7 @@ Additionally to pump head you will need to get some electronics:
 I have ordered all parts from AliExpress. Total cost of the pump was about $20 including some plastic for printing.
 
 # SOFTWARE
-Arduino firmware is available on GitHub https://github.com/Phisik/Peristaltic-Pump. 
+Sorce codes of Arduino firmware for DIY Nema motor based peristaltic pump are available in preset repository. 
 
 Main features:
 
