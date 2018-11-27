@@ -1,7 +1,6 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <ClickEncoder.h>
-#include <TimerOne.h>
 #include <EEPROM.h>
 
 LiquidCrystal_I2C lcd(0x3F, 16, 2);
@@ -10,28 +9,35 @@ LiquidCrystal_I2C lcd(0x3F, 16, 2);
 //========================================================================
 // pins numbers
 const uint8_t pinEnable = A2;
-const uint8_t pinStep = 10;
-const uint8_t pinDir = 9;
+const uint8_t pinStep   = 10;
+const uint8_t pinDir    = 9;
 
 const uint8_t pinMS1 = A1;
 const uint8_t pinMS2 = A0;
 const uint8_t pinMS3 = 13;
 
 const uint8_t pinReset = 12;
-const uint8_t pinSleep = 13;
+const uint8_t pinSleep = 11;
 
 // Speed & motor setup
 const int8_t    microStepping = 16;
-const int16_t   maxRpm = 300;
+const int16_t   maxRpm = 300;		// Upper limit, don't increase RMP above this
+const float     minRpm = 0.01;		// Lower limit, set RPM=0
 const int16_t   rpmRate = 50;		// RPM increase per second when user change speed
 const int16_t   haltRate = 200;		// RPM increase per second when motor halts
 const int16_t   volumeRpm = 175;	// RPM when need to pump some water volume
 
-const float   degreePerStep = 1.8; // Nema 17 usual value
+const float   degreePerStep = 1.8;  // rather common value for widespread motors
 const int16_t stepsPerRevolution = 360 / degreePerStep * microStepping;
 
-const int8_t slowdownRevolutions = 10;   // How many revolutions to end we should slow down
+const int8_t  slowdownRevolutions = 10;   // How many revolutions to end we should slow down
 const float   slowdownFactor = 0.2;
+
+// Show litres per hour instead of millilitres per minute
+#define DISPLAY_LITRES_PER_HOUR 1
+
+// Pump stops when enters MODE_MILLILITRE, if you do not this mode it you can switch it off
+#define DISABLE_MODE_MILLILITRE 1
 
 // Variables
 //========================================================================
@@ -59,6 +65,8 @@ volatile long halfStepLimit = 0;
 
 #define MAGIC_BYTE 0
 
+// EEPROM handling
+//========================================================================
 void eepromWrite() {
 	EEPROM.write(0, (uint8_t)MAGIC_BYTE);
 	EEPROM.write(1, (uint8_t)pumpMode);
@@ -80,6 +88,8 @@ bool eepromRead() {
 	return true;
 }
 
+// Setup()
+//========================================================================
 void setup() {
 	lcd.begin();
 	lcd.clear();
@@ -167,17 +177,19 @@ void setup() {
 
 	
 	lcd.setCursor(0, 1);
-	lcd.print(F("      v1.0      "));
+	lcd.print(F("      v1.1      "));
 	delay(2000);
 }
 
 
-// stepper half step tick 
+// stepper half step timer
+//===============================================================================================================
 long slowdownLimit = 0;
 ISR(TIMER1_COMPB_vect) {
 	stepCounter++;
 
 	// Slowdown motor when at the and of specific water volume pumping
+	// We do all calculations here, since it does not affect overall performance in our case
 	if( slowdownLimit < stepCounter)
 		if(slowdownLimit == 0) {
 			slowdownLimit = halfStepLimit - 1L * slowdownRevolutions * stepsPerRevolution;
@@ -197,6 +209,7 @@ ISR(TIMER1_COMPB_vect) {
 }
 
 // 1kHz encoder service routine
+//===============================================================================================================
 ISR(TIMER2_COMPA_vect) {
 	encoder->service();
 	nMotorCounter++;
@@ -218,6 +231,8 @@ void setMotorSpeed(float rpm) {
 	long freq = long(1.0 * abs(rpm) * stepsPerRevolution / 60.);
 
 	TCNT1 = 0; // set counter value to 0
+
+	// Choose prescalers for according to required frequency
 	if (freq > 1000) {
 		TCCR1B = (TCCR1B & B11111000) | B00000001; // prescaler = 1
 		OCR1A = uint16_t(8e6 / freq) - 1; // set compare match register
@@ -241,16 +256,31 @@ void displayPumpData() {
 	case MODE_RPM:
 		lcd.print(F("Motor speed, RMP"));
 		lcd.setCursor(0, 1);
-		sprintf(buffer, "%-+6d SET: %+4d", (int)currentRpm, (int)targetRpm);
+		sprintf(buffer, "%-+5d SET: %+5d", (int)currentRpm, (int)targetRpm);
 		lcd.print(buffer);
 		break;
 	case MODE_ML_PER_MIN:
-		lcd.print(F("Flow rate, ml/m "));
+		#if DISPLAY_LITRES_PER_HOUR
+			lcd.print(F("Flow rate, l/hr "));
+		#else
+			lcd.print(F("Flow rate, ml/m "));
+		#endif
+		
 		lcd.setCursor(0, 1);
 		{
-			float factor = (currentRpm > 0) ? rpm2millilitreCw : rpm2millilitreCcw;
-			sprintf(buffer, "%-+6d SET: %+4d", int(currentRpm*factor), int(targetRpm*factor));
-			lcd.print(buffer);
+			const float rpm2ml = (currentRpm > 0) ? rpm2millilitreCw : rpm2millilitreCcw;
+			#if DISPLAY_LITRES_PER_HOUR
+				const int clph = round(currentRpm * rpm2ml * 0.6);  // 60 / 1000 * 10
+				const int tlph = round(targetRpm * rpm2ml * 0.6);
+
+        // Was it so difficult to add normal floating point support to sprintf()!?
+				sprintf(buffer, "%+3d.%1d SET: %+3d.%1d", clph/10, abs(clph%10), tlph/10, abs(tlph%10));
+        if(currentRpm<0 && clph<10) buffer[1]  = '-';
+        if(targetRpm<0 && tlph<10)  buffer[12] = '-';
+			#else
+				sprintf(buffer, "%-+5d SET: %+5d", (int)round(currentRpm*factor), (int)round(targetRpm*factor));
+			#endif
+      lcd.print(buffer);
 		}
 		break;
 	case MODE_MILLILITRE:
@@ -274,8 +304,6 @@ void displayPumpData() {
 // Main loop
 //===============================================================================================================
 
-
-uint8_t n = 0;
 uint8_t nStateMachine = 0;
 void loop() {
 	static long lastTime = 0;
@@ -283,17 +311,38 @@ void loop() {
 	// process encoder rotation
 	float delta = encoder->getValue();
 	if (delta) {
-		if (pumpMode == MODE_MILLILITRE) { // dont change volume if pumping right now
+		if (pumpMode == MODE_MILLILITRE) { // don't change volume if pumping right now
 			if(halfStepLimit<1) {
 				targetVolume += delta;
 				eepromWrite();
 			}
 		} else {
 			currentRpmRate = rpmRate;
-			targetRpm += (pumpMode==MODE_RPM) ? delta : delta / ((targetRpm>0)?rpm2millilitreCw:rpm2millilitreCcw);
+
+      switch (pumpMode)     {
+      case MODE_RPM: 
+      case MODE_MILLILITRE:
+        targetRpm += delta;
+        targetRpm = round(targetRpm);
+        break;
+      case MODE_ML_PER_MIN:
+        
+        if(DISPLAY_LITRES_PER_HOUR) {
+          const double rpm2ml = (targetRpm>0)?rpm2millilitreCw:rpm2millilitreCcw;
+          const double clph = round(targetRpm*rpm2ml*0.6) + delta;
+          targetRpm = clph / rpm2ml / 0.6;
+        } else {
+          const double rpm2ml = (targetRpm>0)?rpm2millilitreCw:rpm2millilitreCcw;
+          const double cmlpm = round(targetRpm*rpm2ml) + delta;
+          targetRpm = cmlpm / rpm2ml;
+        }
+        
+        break;
+      } // switch (pumpMode) 
 
 			if (targetRpm > maxRpm) targetRpm = maxRpm;
 			if (targetRpm < -maxRpm) targetRpm = -maxRpm;
+			if (abs(targetRpm) < minRpm) targetRpm = 0;
 		}
 		displayPumpData();
 	}
@@ -338,9 +387,12 @@ void loop() {
 			}
 			break;
 		case MODE_ML_PER_MIN:
-			pumpMode++;
-			currentRpmRate = haltRate;
-			targetRpm = 0;
+			pumpMode = (DISABLE_MODE_MILLILITRE) ? MODE_RPM : MODE_MILLILITRE;
+			
+			if(!DISABLE_MODE_MILLILITRE) {  // halt pump
+        currentRpmRate = haltRate; 
+			  targetRpm = 0;
+			}
 			break;
 		case MODE_MILLILITRE:
 			if(halfStepLimit<1) // dont switch if pumping right now
@@ -351,6 +403,10 @@ void loop() {
 		displayPumpData();
 		break;
 	case ClickEncoder::Held:
+		// don't start calibration if pumping right now
+		if (pumpMode == MODE_MILLILITRE && halfStepLimit > 1)
+			break;
+
 		if(calibratePump()) {
 			lcd.setCursor(0, 0);
 			lcd.print(F("Pump calibration"));
@@ -383,6 +439,9 @@ void loop() {
 	// every 10 ms change motor speed
 	adjustMotorSpeed();
 }
+
+// Alter motor speed when accelerating / decelerating
+//========================================================================
 
 void adjustMotorSpeed(){
 	if (nMotorCounter > 10) {
