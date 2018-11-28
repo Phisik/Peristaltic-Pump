@@ -20,7 +20,7 @@ Additionally to pump head you will need to get some electronics:
 I have ordered all parts from AliExpress. Total cost of the pump was about $20 including some plastic for printing.
 
 # SOFTWARE
-Sorce codes of Arduino firmware for DIY Nema motor based peristaltic pump are available in preset repository. 
+Source codes of Arduino firmware for DIY Nema motor based peristaltic pump are available in preset repository. 
 
 Main features:
 
