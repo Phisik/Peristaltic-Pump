@@ -25,7 +25,7 @@ const int16_t   maxRpm = 300;		// Upper limit, don't increase RMP above this
 const float     minRpm = 0.01;		// Lower limit, set RPM=0
 const int16_t   rpmRate = 50;		// RPM increase per second when user change speed
 const int16_t   haltRate = 200;		// RPM increase per second when motor halts
-const int16_t   volumeRpm = 175;	// RPM when need to pump some water volume
+const int16_t   volumeRpm = 200;	// RPM when need to pump some water volume
 
 const float   degreePerStep = 1.8;  // rather common value for widespread motors
 const int16_t stepsPerRevolution = 360 / degreePerStep * microStepping;
@@ -98,6 +98,8 @@ void setup() {
 	// Show invitation
 	lcd.setCursor(0, 0);
 	lcd.print(F("Peristaltic pump"));
+	lcd.setCursor(0, 1);
+	lcd.print(F("      v1.2      "));
 
 	// Serial.begin(115200);
 	encoder = new ClickEncoder(3, 4, 2, 2);
@@ -176,8 +178,7 @@ void setup() {
 	sei();  // allow interrupts
 
 	
-	lcd.setCursor(0, 1);
-	lcd.print(F("      v1.1      "));
+	
 	delay(2000);
 }
 
@@ -275,8 +276,8 @@ void displayPumpData() {
 
         // Was it so difficult to add normal floating point support to sprintf()!?
 				sprintf(buffer, "%+3d.%1d SET: %+3d.%1d", clph/10, abs(clph%10), tlph/10, abs(tlph%10));
-        if(currentRpm<0 && clph<10) buffer[1]  = '-';
-        if(targetRpm<0 && tlph<10)  buffer[12] = '-';
+        if(currentRpm<0 && clph>-10) buffer[1]  = '-';
+        if(targetRpm<0 && tlph>-10)  buffer[12] = '-';
 			#else
 				sprintf(buffer, "%-+5d SET: %+5d", (int)round(currentRpm*factor), (int)round(targetRpm*factor));
 			#endif
@@ -547,7 +548,7 @@ bool calibratePump() {
 	} while (1);
 	encoder->setAccelerationEnabled(true);
 	
-	const int revolutionNum = 50;
+	const int revolutionNum = 200;
 	if(selection!=1) {
 		lcd.setCursor(0, 0);
 		lcd.print(F("Reset scales and"));
