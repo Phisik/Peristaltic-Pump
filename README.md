@@ -32,4 +32,4 @@ Main features:
 
 Modes can be switched by single click. Double click is used for start/stop. Button hold enables pump calibration mode.
 
-Video showing the pump in action: https://youtu.be/gSazD-1rZDA
+Video showing the pump in action: https://youtu.be/RnriTiulfPw
