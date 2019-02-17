@@ -1,4 +1,4 @@
-include <settings.v3>
+include <settings.scad>
 
 $fn = 75;
 

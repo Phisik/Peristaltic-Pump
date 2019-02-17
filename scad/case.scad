@@ -6,21 +6,13 @@
 
 // Settings
 //==============================================================================
-include <settings.v3>
+include <settings.scad>
 use <lcd1602.scad>
 
 assembly      = 0;   // render assembly
 render_top    = 1;   // render top part
 render_bottom = 0;   // render bottom part
 render_side_panel = 1;   // render bottom part
-
-enable_angle_support = 1;
-
-h_layer_height = 0.25;
-w_angle_support = 15;
-n_support_layers = 3;
-angle_support_clearance = 0.15;
-
 
 rubber_legs = true;
 d1_rubber_legs = 15;
@@ -37,7 +29,7 @@ nema_clearance = 0.8;
 front_angle=20;
 back_angle=45;
 wall_case = 0.46*cos(front_angle)*4;
-wall_size_scale = 1/cos(front_angle);  // when 3d printing tilded walls will be thicker
+wall_size_scale = 1/cos(front_angle);  // when 3d printing tilded walls will thicker
 
 
 
@@ -107,7 +99,7 @@ clip_clearance = 0.5;
 holders_size = 10;
 d_holder_hole = 2;
 
-// Assemble all parts
+// Assemble
 //==============================================================================
 if(assembly) {
     alpha = 1;
@@ -129,36 +121,9 @@ if(assembly) {
         if(rubber_legs) color("gray") draw_rubber_legs(); 
     }
 } else {
-    if(render_top) {
-        translate([0, -w_front_panel/2, 0])
-        rotate([180+front_angle, 0, 0]) 
-            translate([0, -wall_case, -h_case+w_front_panel*sin(front_angle)])
-            case_main();
-        
-        difference(){
-            union() {
-                for(sx=[1, -1]) for(sy=[1, -1])
-                    translate([sx*(l_case-wall_case)/2, sy*w_front_panel/2, n_support_layers*h_layer_height/2])
-                    cube([w_angle_support, w_angle_support, h_layer_height*n_support_layers], center=true);
-
-            }
-            
-            translate([0,0,h_layer_height/2]) hull(){
-                h = 50; d=angle_support_clearance;
-                cube([l_case-wall_case+d/2, w_front_panel+d, h_layer_height], center=true);
-                translate([0,-h*sin(front_angle)+h*sin(back_angle-front_angle),h-h_layer_height])
-                    cube([l_case-wall_case+d/2, w_front_panel+d+h*sin(front_angle)+h*sin(back_angle-front_angle), h_layer_height], center=true);
-            }
-        }
-        
-        // enable_angle_support = 1;
-        //h_angle_support = 0.5;
-        // w_angle_support = 10;
-    }
+    if(render_top)       rotate([180+front_angle, 0, 0]) case_main();
     if(render_bottom)    bottom_cover();
 }
-// Assemble
-
 
 // Bottom cover
 //==============================================================================
@@ -272,7 +237,6 @@ module bottom_cover() {
             cube([l_clip, w_clip, h_clip]);
     }
 }
-// module bottom_cover() 
 
 module draw_rubber_legs(){
     translate([0,-l_case/2 + 0.5*wall_case + cover_clearance, -h_rubber_legs]) {
@@ -292,7 +256,6 @@ module draw_rubber_legs(){
        }
     }
 }
-// module draw_rubber_legs()
 
 // Case main/top part
 //==============================================================================
@@ -318,7 +281,7 @@ module case_main() {
                   h_case-0.5*w_front_panel*sin(front_angle)
                ])
     rotate([-front_angle,0,0])
-        translate([0,0,-wall_case]) {
+    translate([0,0,-wall_case]) {
         difference(){
             translate([-w_case/2,-w_front_panel/2,0]) 
                cube([w_case, w_front_panel, wall_case], center=false);
@@ -349,8 +312,7 @@ module case_main() {
                 lcd_stand();
             translate([-x_lcd_hole, -y_lcd_hole, -eps]/2)
                 lcd_stand();
-        }
-        // translate()
+        }// translate()
         
         // encoder holders
 //        translate([x_enc_shift+7.25, y_enc_shift, z_enc_shift+1.5]){
@@ -502,8 +464,6 @@ module case_main() {
 }
 
 
-// module case_main() 
-
 // Bottom cover holders
 //==============================================================================
 module holder(size){
@@ -516,7 +476,6 @@ module holder(size){
             cylinder(d=d_holder_hole,h=9);
     }
 }
-// module holder(size)
 
 module clip_holder(f=3){
     a = w_clip+clip_wall+cover_clearance;
@@ -530,7 +489,8 @@ module clip_holder(f=3){
             cube([w_clip+cover_clearance+eps+clip_clearance, l_clip+2*clip_clearance, h_clip+clip_clearance]);
     }
 }
-// module clip_holder()
+
+
 
 // PBC 3d model
 //==============================================================================
@@ -557,5 +517,5 @@ module pcb()
     translate([-20,-5,8]) 
         cube([15, 20, 15], center=true);
 }
-// module pcb()
+
 

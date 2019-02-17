@@ -1,4 +1,4 @@
-include <settings.v3>
+include <settings.scad>
 
 hose_fixator();
 

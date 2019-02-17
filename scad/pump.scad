@@ -7,14 +7,13 @@
 
 // Licence GPL: you are free to distibute & contribute to this part in any form
 
-include <settings.v5>
-use <hose_fixator.scad>
+include <settings.scad>
 
 // Assembly
 //===============================================================
-assemble = 0;
+assemble = 1;
 halfcut = 0;
-moved_apart = 0;
+moved_apart = 1;
 
 
 
@@ -37,15 +36,6 @@ if(assemble) {
     
     // Nema17
     color("gray", alpha) translate([0,0,-40.2]) import("deps/Nema17_40h.stl");
-    
-    // Hose adapters
-    translate([-r_hose, -handle_length+hose_fixator_length, h_hose])   
-        rotate([90,0,0])
-            hose_fixator();
-    translate([r_hose, -handle_length+hose_fixator_length, h_hose])   
-        rotate([90,0,0])
-            hose_fixator();
-        
     
     // Hose
     color("red", alpha)  hose();
@@ -162,23 +152,11 @@ module hose(){
     // rotate([0,0,-angle])
              translate([-r_hose+0.5-0*hose_groove, 0, h_hose])   
              rotate([90,0,0])
-                if(moved_apart)
-                    difference(){
-                        cylinder(d=d_hose, h=handle_length+10);
-                        translate([-25,eps,y_hole_distance]) cube([50,50,100]);
-                    }
-                else 
                     cylinder(d=d_hose, h=handle_length+10);
                 
     // rotate([0,0,+angle])
              translate([r_hose-0.5+0*hose_groove, 0, h_hose])   
              rotate([90,0,0])
-                if(moved_apart)
-                    difference(){
-                        cylinder(d=d_hose, h=handle_length+10);
-                        translate([-25,eps,y_hole_distance]) cube([50,50,100]);
-                    }
-                else 
                     cylinder(d=d_hose, h=handle_length+10);
 }
 

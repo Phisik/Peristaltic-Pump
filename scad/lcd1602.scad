@@ -4,7 +4,7 @@
 // Licence GPL
 // You are free to distibute & contribute to this part in any form
 
-include <settings.v3>
+include <settings.scad>
 
 module lcd1602(){
     // plate
