@@ -17,7 +17,7 @@ layer_height = 0.25;
 // NB! The larger the hose radius the higher torque is required
 r_hose = 22;        // radius of hose center line
                     // Update: after addition of groove hose center is at r_hose + hose_groove
-d_hose = 9;         // hose diameter
+d_hose = 9;         // hose external diameter
 
 hose_wall = 1.5;   // hose wall thickness
 					// NB! hose_wall affects both stator & rotor geometry

@@ -7,7 +7,7 @@
 
 // Licence GPL: you are free to distibute & contribute to this part in any form
 
-include <settings.v3>
+include <settings.v5>
 use <hose_fixator.scad>
 
 // Assembly
@@ -16,7 +16,9 @@ assemble = 0;
 halfcut = 0;
 moved_apart = 0;
 
-partNum = 1; // 1 - stator
+
+
+partNum = 3; // 1 - stator
              // 2 - stator support
              // 3 - stator cover
              // 4 - rotor base
@@ -67,7 +69,8 @@ if(assemble) {
 } else {
    if(partNum==1) stator_base();
    if(partNum==2) stator_support();
-   if(partNum==3) rotate([0,180,0]) stator_cover();
+   if(partNum==3) //rotate([0,180,0]) 
+       stator_cover();
    if(partNum==4) rotor(1);
    if(partNum==5) rotate([0,180,0]) 
        rotor(2);
@@ -400,12 +403,12 @@ module hose_holder(){
      // rotate([0,0,-angle])
          translate([-r_hose+hose_fitting_delta_d/2-0*hose_groove, 0, h_hose])   
          rotate([90,0,0])
-         cylinder(d=d_hose_hole, h=100);
+         scale([1, 0.6, 1]) cylinder(d=d_hose_hole, h=100);
     
      // rotate([0,0,+angle])
          translate([r_hose-hose_fitting_delta_d/2, 0, h_hose])   
          rotate([90,0,0])
-         cylinder(d=d_hose_hole, h=100);
+         scale([1, 0.6, 1]) cylinder(d=d_hose_hole, h=100);
     
     // screws & nuts
     nut_depth = 4;
@@ -439,9 +442,29 @@ module hose_holder(){
 
 // Hose holding cover
 //===============================================================
+r_fix = 2.5;
+echo(d_hose=d_hose);
+echo(d_hose_hole=d_hose_hole);
 module stator_cover(){
     difference(){
-         hose_holder();
+        
+         union() {
+             hose_holder();
+             translate([r_hose-hose_fitting_delta_d/2, -handle_length+5, h_hose])   
+
+
+rotate([90,0,0])
+scale([d_hose_hole/(d_hose-r_fix),0.6,1]) torus(d_hose/2, r_fix);
+translate([r_hose-hose_fitting_delta_d/2, -handle_length+15, h_hose])   
+rotate([90,0,0])
+scale([d_hose_hole/(d_hose-r_fix),0.6,1]) torus(d_hose/2, r_fix);
+translate([-r_hose+hose_fitting_delta_d/2, -handle_length+5, h_hose])   
+rotate([90,0,0])
+scale([d_hose_hole/(d_hose-r_fix),0.6,1]) torus(d_hose/2, r_fix);
+translate([-r_hose+hose_fitting_delta_d/2, -handle_length+15, h_hose])   
+rotate([90,0,0])
+scale([d_hose_hole/(d_hose-r_fix),0.6,1]) torus(d_hose/2, r_fix);
+         }
         
          translate([-r_ext-eps, -handle_length-eps,-eps])
             cube([2*r_ext+2*eps, handle_length, h_hose+gap]);
@@ -454,14 +477,14 @@ module stator_cover(){
         
          // hose input & output holes
          //rotate([0,0,-angle])
-             translate([-r_hose+hose_fitting_delta_d/2, 0, h_hose])   
-             rotate([90,0,0])
-             cylinder(d=d_hose_hole, h=100);
+//             translate([-r_hose+hose_fitting_delta_d/2, 0, h_hose])   
+//             rotate([90,0,0])
+//             scale([1,0.5,1]) cylinder(d=d_hose_hole, h=100);
         
         // rotate([0,0,+angle])
-             translate([r_hose-hose_fitting_delta_d/2, 0, h_hose])   
-             rotate([90,0,0])
-             cylinder(d=d_hose_hole, h=100);
+//             translate([r_hose-hose_fitting_delta_d/2, 0, h_hose])   
+//             rotate([90,0,0])
+//             cylinder(d=d_hose_hole, h=100);
         }
 }
 

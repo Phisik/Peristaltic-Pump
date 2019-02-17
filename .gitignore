@@ -1,0 +1,23 @@
+# Ignore everything
+*
+
+# But not these files...
+!.gitignore
+!.gitattributes
+!readme.txt
+
+# ...even if they are in subdirectories
+!scad/
+!scad/*
+
+!pcb/
+!pcb/*
+
+!export/
+!export/*
+
+!deps/
+!deps/*
+
+!doc/
+!doc/*
