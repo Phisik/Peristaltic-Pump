@@ -3,7 +3,31 @@
 #include <ClickEncoder.h>
 #include <EEPROM.h>
 
-LiquidCrystal_I2C lcd(0x27, 16, 2);
+const double firmwareVersion = 2.0;
+
+// Enable debug output to Serial
+#define DEBUG_ENABLED 0
+
+// EEPROM magic byte, increment this to clear EEPROM settings
+#define MAGIC_BYTE 2
+
+// Show litres per hour instead of millilitres per minute
+#define DISPLAY_LITRES_PER_HOUR 1
+
+// Pump stops when enters MODE_BOTTLING, if you do not this mode it you can switch it off
+#define DISABLE_MODE_BOTTLING 1
+
+// Starting from v2.0 pump save total motor uptime & pumped volume to eeprom, disable it if not used
+#define ENABLE_UPTIME_CALC 1
+
+// We can use simple moisture sensor to detect hose failure
+#define ENABLE_MOISTURE_SENSOR 0
+
+// Threshold above which pump will halt. Set threshold to 2-255 for analog input, or to 1 for digital input
+// Note: A6 & A7 pins cannot do digitalRead() and should use analog input only, i.e. threshold>2
+#define MOISTURE_SENSOR_THRESHOLD 100 
+
+LiquidCrystal_I2C lcd(0x3F, 16, 2);
 
 // Settings
 //========================================================================
@@ -19,6 +43,8 @@ const uint8_t pinMS3 = 13;
 const uint8_t pinReset = 12;
 const uint8_t pinSleep = 11;
 
+const uint8_t pinMoistureSensor = A6;
+
 // Speed & motor setup
 const int8_t    microStepping = 8;
 const int16_t   maxRpm = 465;		// Upper limit, don't increase RMP above this
@@ -32,12 +58,6 @@ const int16_t stepsPerRevolution = 360 / degreePerStep * microStepping;
 
 const int8_t  slowdownRevolutions = 10;   // How many revolutions to end we should slow down
 const float   slowdownFactor = 0.2;
-
-// Show litres per hour instead of millilitres per minute
-#define DISPLAY_LITRES_PER_HOUR 1
-
-// Pump stops when enters MODE_BOTTLING, if you do not this mode it you can switch it off
-#define DISABLE_MODE_BOTTLING 0
 
 // Variables
 //========================================================================
@@ -63,34 +83,84 @@ volatile uint8_t nMotorCounter = 0;
 volatile long stepCounter = 0;
 volatile long halfStepLimit = 0;
 
-#define MAGIC_BYTE 0
+// variable for uptime counting
+uint32_t totalMotorUptime = 0;		// motor uptime in seconds
+double   totalPumpedVolume = 0;	    // total pumped volume in litres
+float    lastCurrentRpm = 0;
+const uint16_t volumeIntegralPeriodMs = 1000; 
+uint32_t eepromSaveTotalsPeriodMs = 60000;
+uint32_t eepromRewriteCounter = 0;  // ATMEL gives 100000 cell rewrite lifetime
+							 		// With eeprom update once in every minute we will hold for 100000/60/24 ~ 70 days
+									// So for the first 10 minutes we will save uptime every minute
+									//            after 10 minutes - every 5 minutes
+									//            after 1 hour - every 10 minutes
+									  	
+
+// Debug helpers
+#if DEBUG_ENABLED
+	#define DEBUG_BEGIN(baudRate)	Serial.begin(baudRate)
+										// Prints debug message
+	#define DEBUG_PRINT(...)		Serial.print(__VA_ARGS__)
+	#define DEBUG_PRINTLN(...)		Serial.println(__VA_ARGS__)
+										// Debug block may contain any code that we'll be switched off when debugging disabled
+	#define DEBUG_BLOCK(block)		do { block; } while(0)	
+#else
+	#define DEBUG_BEGIN(...)
+	#define DEBUG_PRINT(...)   
+	#define DEBUG_PRINTLN(...) 
+	#define DEBUG_BLOCK(block)
+#endif
 
 // EEPROM handling
 //========================================================================
+extern void eepromWriteTotals();
 void eepromWrite() {
+	eepromRewriteCounter++;
+
 	EEPROM.write(0, (uint8_t)MAGIC_BYTE);
 	EEPROM.write(1, (uint8_t)pumpMode);
 	EEPROM.put(2, rpm2millilitreCw);
 	EEPROM.put(6, rpm2millilitreCcw);
 	EEPROM.put(10, lastTargetRpm);
-	EEPROM.put(20, targetVolume);
+	EEPROM.put(15, targetVolume);
+#if !ENABLE_UPTIME_CALC
 }
+#else
+	eepromWriteTotals();
+}
+
+void eepromWriteTotals(){
+	EEPROM.put(20, totalMotorUptime);
+	EEPROM.put(25, totalPumpedVolume);
+	EEPROM.put(30, eepromRewriteCounter);
+}
+#endif
 
 bool eepromRead() {
 	const uint8_t magic = EEPROM.read(0);
-	if (magic != MAGIC_BYTE) return false;
+	if (magic != MAGIC_BYTE) {
+		eepromWrite(); // clear old data
+		return false;
+	}
 
 	pumpMode = (uint8_t)EEPROM.read(1);
 	EEPROM.get(2, rpm2millilitreCw);
 	EEPROM.get(6, rpm2millilitreCcw);
 	EEPROM.get(10, lastTargetRpm);
-	EEPROM.get(20, targetVolume);
+	EEPROM.get(15, targetVolume);
+#if ENABLE_UPTIME_CALC
+	EEPROM.get(20, totalMotorUptime);
+	EEPROM.get(25, totalPumpedVolume);
+	EEPROM.get(30, eepromRewriteCounter);
+#endif
 	return true;
 }
 
 // Setup()
 //========================================================================
 void setup() {
+	DEBUG_BEGIN(115200);
+
 	lcd.begin();
 	lcd.clear();
 	lcd.backlight();	
@@ -99,15 +169,14 @@ void setup() {
 	lcd.setCursor(0, 0);
 	lcd.print(F("Peristaltic pump"));
 	lcd.setCursor(0, 1);
-	lcd.print(F("      v1.2      "));
+	lcd.print(String(F("      v")) + String(firmwareVersion, 1)+String(F("      ")));	
 
-	// Serial.begin(115200);
 	encoder = new ClickEncoder(3, 4, 2, 2);
 
 	if (!eepromRead())
-		Serial.println(F("Failed to read EEPROM values"));
+		DEBUG_PRINTLN(F("Failed to read EEPROM values"));
 
-	// Sets the two pins as Outputs
+	// Setup pins
 	pinMode(pinStep,   OUTPUT);
 	pinMode(pinDir,    OUTPUT);
 	pinMode(pinEnable, OUTPUT);
@@ -117,35 +186,31 @@ void setup() {
 	pinMode(pinSleep,  OUTPUT);
 	pinMode(pinReset,  OUTPUT);
 
+#if	ENABLE_MOISTURE_SENSOR
+	pinMode(pinMoistureSensor,  INPUT);
+#endif
+
+	// Stepper driver setup
 	digitalWrite(pinEnable, HIGH);
 	digitalWrite(pinReset, HIGH);
 	digitalWrite(pinSleep, HIGH);
 
+	// Choose microstepping
 	switch(microStepping){
 	case 1:
-		digitalWrite(pinMS1, LOW);
-		digitalWrite(pinMS2, LOW);
-		digitalWrite(pinMS3, LOW);
+		digitalWrite(pinMS1, LOW); 		digitalWrite(pinMS2, LOW); 		digitalWrite(pinMS3, LOW);
 		break;
 	case 2:
-		digitalWrite(pinMS1, LOW);
-		digitalWrite(pinMS2, HIGH);
-		digitalWrite(pinMS3, LOW);
+		digitalWrite(pinMS1, LOW); 		digitalWrite(pinMS2, HIGH); 	digitalWrite(pinMS3, LOW);
 		break;
 	case 4:
-		digitalWrite(pinMS1, LOW);
-		digitalWrite(pinMS2, HIGH);
-		digitalWrite(pinMS3, LOW);
+		digitalWrite(pinMS1, LOW);		digitalWrite(pinMS2, HIGH);		digitalWrite(pinMS3, LOW);
 		break;
 	case 8:
-		digitalWrite(pinMS1, HIGH);
-		digitalWrite(pinMS2, HIGH);
-		digitalWrite(pinMS3, LOW);
+		digitalWrite(pinMS1, HIGH);		digitalWrite(pinMS2, HIGH);		digitalWrite(pinMS3, LOW);
 		break;
 	case 16:
-		digitalWrite(pinMS1, HIGH);
-		digitalWrite(pinMS2, HIGH);
-		digitalWrite(pinMS3, HIGH);
+		digitalWrite(pinMS1, HIGH);		digitalWrite(pinMS2, HIGH);		digitalWrite(pinMS3, HIGH);
 		break;
 	}
 	
@@ -175,11 +240,38 @@ void setup() {
 	TCCR2B |= _BV(CS22);   // Set CS21 bit for 64 prescaler
 	TIMSK2 |= _BV(OCIE2A); // enable timer compare interrupt
 
-	sei();  // allow interrupts
+	sei();  // allow interrupts	
 
-	
-	
+#if ENABLE_UPTIME_CALC
+	delay(1000);
+	// Display total stepper uptime
+	lcd.clear();
+	lcd.print(F("Motor uptime:   "));
+	lcd.setCursor(0, 1);
+	String line;
+	uint32_t tmpMotorUptime = totalMotorUptime;
+	if (totalMotorUptime >= 86400)		  line += String(int(totalMotorUptime / 86400)) + String(F("d "));
+	if ((tmpMotorUptime%=86400) > 3600)   line += String(int(tmpMotorUptime / 3600)) + String(F("h "));
+	if ((tmpMotorUptime%=3600) > 60)	  line += String(int(tmpMotorUptime / 60)) + String(F("m "));
+	if ( totalMotorUptime < 86400)		  line += String(int(tmpMotorUptime%60)) + String(F("s"));
+	lcd.print(line);
+	DEBUG_PRINT(F("Total motor uptime: "));
+	DEBUG_PRINTLN(line);
+	delay(1000);
+
+	// Display total volume pumped
+	lcd.clear();
+	lcd.print(F("Total volume:   "));
+	lcd.setCursor(0, 1);
+	line = String(totalPumpedVolume, 2) + String(F("L"));
+	lcd.print(line);
+	DEBUG_PRINT(F("Total volume pumped: "));
+	DEBUG_PRINT(totalPumpedVolume, 3);
+	DEBUG_PRINTLN(F("L"));
+	delay(1000);
+#else
 	delay(2000);
+#endif
 }
 
 
@@ -309,6 +401,78 @@ void displayPumpData() {
 uint8_t nStateMachine = 0;
 void loop() {
 	static long lastTime = 0;
+	const uint32_t loopMillis = millis();
+	const double rpm2ml = (targetRpm>0)?rpm2millilitreCw:rpm2millilitreCcw;
+
+#if	ENABLE_MOISTURE_SENSOR
+	static long lastSensorReadTime = 0;
+	static bool haltOnHoseFailureFlag = 0;
+	if( !haltOnHoseFailureFlag && loopMillis-lastSensorReadTime > 777) {
+		// Read the input on moisture sensor pin
+		int sensorValue = (MOISTURE_SENSOR_THRESHOLD > 1) ? analogRead(pinMoistureSensor) : digitalRead(pinMoistureSensor);
+		if(sensorValue>=MOISTURE_SENSOR_THRESHOLD) {
+			lcd.clear();
+			lcd.print("  Hose failure  ");
+			lcd.setCursor(0, 1);
+			lcd.print("    detected!   ");
+
+			DEBUG_PRINTLN(F("WARNING! The hose failure was detected. The pump was halted!"));
+
+			haltOnHoseFailureFlag = true;
+		}
+		lastSensorReadTime = loopMillis;
+	}
+	if(haltOnHoseFailureFlag) {
+		currentRpmRate = haltRate;
+		targetRpm = 0;
+		adjustMotorSpeed();
+		return;
+	}
+#endif
+
+#if ENABLE_UPTIME_CALC
+	static long lastIntegralTime = 0;
+	static long lastEepromSaveTime = 0;
+	static long lastTotalMotorUptime = totalMotorUptime;
+	static long eepromWriteCounter = 0;
+
+	// Count pumped volume
+	if( loopMillis-lastIntegralTime > volumeIntegralPeriodMs ) {
+		if (abs(currentRpm) > 0) totalMotorUptime += volumeIntegralPeriodMs/1000;
+		const double rpmIntegral = 0.5*(currentRpm + ((currentRpm*lastCurrentRpm>0)?1:-1)*lastCurrentRpm)/60 * volumeIntegralPeriodMs/1000;
+		totalPumpedVolume += rpm2ml * abs(rpmIntegral) / 1000;
+		
+		DEBUG_BLOCK({
+			if(abs(rpmIntegral)>0){
+				String line;
+				uint32_t tmpMotorUptime = totalMotorUptime;
+				if (totalMotorUptime >= 86400)		  line += String(int(totalMotorUptime / 86400)) + String(F("d "));
+				if ((tmpMotorUptime%=86400) > 3600)   line += String(int(tmpMotorUptime / 3600)) + String(F("h "));
+				if ((tmpMotorUptime%=3600) > 60)	  line += String(int(tmpMotorUptime / 60)) + String(F("m "));
+				line += String(int(tmpMotorUptime%60)) + String(F("s"));
+				DEBUG_PRINT(F("Total motor uptime: "));
+				DEBUG_PRINT(line);
+
+				DEBUG_PRINT(F(". Total volume pumped: "));
+				DEBUG_PRINT(totalPumpedVolume, 3);
+				DEBUG_PRINTLN(F("L"));
+				
+			}});
+
+		lastCurrentRpm = currentRpm;
+		lastIntegralTime = loopMillis;
+	}
+
+	// Save totals to eeprom
+	if(totalMotorUptime > lastTotalMotorUptime && loopMillis-lastEepromSaveTime>eepromSaveTotalsPeriodMs){
+		eepromWriteTotals();
+		lastTotalMotorUptime = totalMotorUptime;
+		lastEepromSaveTime = loopMillis;
+		// Increase eeprom save period to extend cell life
+		if (++eepromWriteCounter > 10)		eepromSaveTotalsPeriodMs =  5*60*1000; // 5 minutes
+		else if (eepromWriteCounter > 20)	eepromSaveTotalsPeriodMs = 10*60*1000; // 10 minutes
+	}
+#endif
 
 	// process encoder rotation
 	float delta = encoder->getValue();
@@ -328,11 +492,9 @@ void loop() {
 				break;
 			case MODE_LITRES_PER_HOUR:        
 				if(DISPLAY_LITRES_PER_HOUR) {
-					const double rpm2ml = (targetRpm>0)?rpm2millilitreCw:rpm2millilitreCcw;
 					const double clph = round(targetRpm*rpm2ml*0.6) + delta;
 					targetRpm = clph / rpm2ml / 0.6;
 				} else {
-					const double rpm2ml = (targetRpm>0)?rpm2millilitreCw:rpm2millilitreCcw;
 					const double cmlpm = round(targetRpm*rpm2ml) + delta;
 					targetRpm = cmlpm / rpm2ml;
 				}        
@@ -419,7 +581,7 @@ void loop() {
 			lcd.setCursor(0, 1);
 			lcd.print(F("was canceled    "));
 		}
-		lastTime = millis() + 1500;
+		lastTime = loopMillis + 1500;
 
 		// Wait button release
 		while (encoder->getButton() == ClickEncoder::Held)
@@ -430,9 +592,9 @@ void loop() {
 	} // switch (encoder->getButton())
 
 	// display motor speed twice per second
-	if (millis() > lastTime + ((halfStepLimit>0)?100:500)) {
+	if (loopMillis > lastTime + ((halfStepLimit>0)?100:500)) {
 		displayPumpData();
-		lastTime = millis();
+		lastTime = loopMillis;
 	}
 
 	// every 10 ms change motor speed
@@ -512,11 +674,7 @@ bool calibratePump() {
 		int delta = encoder->getValue();
 		if (delta) {
 			selection = (selection + delta + 3) % 3;
-			Serial.println(delta);
-			Serial.println(selection);
-		}
-
-		
+		}		
 
 		lcd.setCursor(0, 1);
 		switch (selection) {
