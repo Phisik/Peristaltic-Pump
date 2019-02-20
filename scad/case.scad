@@ -113,7 +113,7 @@ if(assembly) {
         translate([0,-l_case, h_case-w_back_panel*sin(back_angle)]) 
         rotate([back_angle, 0, 0])  
         translate([0,handle_length, 0]) 
-        import("pump-v3-assembly.stl");
+        import("head-assembly.stl");
     
     if(render_top)       case_main();
     if(render_bottom)    { 

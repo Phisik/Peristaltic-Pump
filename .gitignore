@@ -21,3 +21,6 @@
 
 !doc/
 !doc/*
+
+!firmware/
+!firmware/*.ino
