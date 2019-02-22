@@ -5,6 +5,9 @@
 
 const double firmwareVersion = 2.0;
 
+// Firmware features
+//==============================================================================================
+
 // Enable debug output to Serial
 #define DEBUG_ENABLED 0
 
@@ -15,10 +18,19 @@ const double firmwareVersion = 2.0;
 #define DISPLAY_LITRES_PER_HOUR 1
 
 // Pump stops when enters MODE_BOTTLING, if you do not this mode it you can switch it off
-#define DISABLE_MODE_BOTTLING 1
+#define ENABLE_MODE_BOTTLING 0
 
 // Starting from v2.0 pump save total motor uptime & pumped volume to eeprom, disable it if not used
 #define ENABLE_UPTIME_CALC 1
+
+// Enable external speed control from moonshine controller, e.g. HelloDistiller
+#define ENABLE_EXTERNAL_CONTROL 0
+
+// Choose control signal 
+//     0 = PWM signal from pin 2/interrupt 0, RPM = Duty*maxRpm.  Move encoder pins somewhere else.
+//     1 = PWM signal from pin 3/interrupt 1, RPM = Duty*maxRpm.  Move encoder pins somewhere else.
+//     2 = analog 0-5V input from pins A6/A7, RPM = InputVoltage*maxRpm/5V
+#define EXTERNAL_CONTROL_TYPE 0
 
 // We can use simple moisture sensor to detect hose failure
 #define ENABLE_MOISTURE_SENSOR 0
@@ -29,12 +41,12 @@ const double firmwareVersion = 2.0;
 
 LiquidCrystal_I2C lcd(0x3F, 16, 2);
 
-// Settings
-//========================================================================
+// Hardware Settings
+//================================================================================================
 // pins numbers
 const uint8_t pinEnable = A2;
-const uint8_t pinStep   = 10;
-const uint8_t pinDir    = A3;
+const uint8_t pinStep = 10;
+const uint8_t pinDir = A3;
 
 const uint8_t pinMS1 = A1;
 const uint8_t pinMS2 = A0;
@@ -43,43 +55,67 @@ const uint8_t pinMS3 = 13;
 const uint8_t pinReset = 12;
 const uint8_t pinSleep = 11;
 
+#if ENABLE_MOISTURE_SENSOR
 const uint8_t pinMoistureSensor = A6;
+#endif
+
+#if ENABLE_EXTERNAL_CONTROL 
+#if EXTERNAL_CONTROL_TYPE==0
+const uint8_t pinExtControl = 2;  // Interrupt 0
+#elif EXTERNAL_CONTROL_TYPE==1
+const uint8_t pinExtControl = 3;  // Interrupt 1
+#else
+const uint8_t pinExtControl = A7;  // Analog input pin
+#endif
+#endif
+
+const uint8_t pinEncoderA = 3;
+const uint8_t pinEncderB = 4;
+const uint8_t pinEncoderButton = 5;
+
+#define ENCODER_STEP_PER_NOTCH 2
 
 // Speed & motor setup
 const int8_t    microStepping = 8;
-const int16_t   maxRpm = 465;		// Upper limit, don't increase RMP above this
-const float     minRpm = 0.01;		// Lower limit, set RPM=0
-const int16_t   rpmRate = 50;		// RPM increase per second when user change speed
-const int16_t   haltRate = 200;		// RPM increase per second when motor halts
-const int16_t   volumeRpm = 200;	// RPM when need to pump some water volume
+const int16_t   maxRpm = 465;			// Upper limit, don't increase RMP above this
+const float     minRpm = 0.01;			// Lower limit, set RPM=0
+const int16_t   rpmAccelerationRate = 50;	// RPM increase per second when user change speed
+const int16_t   rpmHaltRate = 200;		// RPM increase per second when motor halts
+const int16_t   volumeRpm = 200;		// RPM when need to pump some water volume
 
 const float   degreePerStep = 1.8;  // rather common value for widespread motors
 const int16_t stepsPerRevolution = 360 / degreePerStep * microStepping;
 
-const int8_t  slowdownRevolutions = 10;   // How many revolutions to end we should slow down
+const int8_t  slowdownRevolutions = 7;   // How many revolutions to the end we should slow down
 const float   slowdownFactor = 0.2;
 
 // Variables
-//========================================================================
+//================================================================================================
 
-#define MODE_RPM 0
-#define MODE_LITRES_PER_HOUR 1
-#define MODE_BOTTLING 2
+#define MODE_RPM			 0		// Control RPM
+#define MODE_LITRES_PER_HOUR 1      // Control liquid volume per second
 
-int8_t  pumpMode = 0;    // 0 - rpm, 1 - ml/m, 2 - ml
+#if ENABLE_MODE_BOTTLING 
+#define MODE_BOTTLING	 2      // Pump fixed volume of liquid
+#endif
+#if ENABLE_EXTERNAL_CONTROL
+#define MODE_EXT_CONTROL 3	    // External control via PWM or analog signal
+#endif
+
+int8_t  pumpMode = 0;
 
 int16_t  targetVolume = 500;
 float    targetRpm = 0;
 float    lastTargetRpm = 0;
 float    currentRpm = 0;
-int16_t  currentRpmRate = rpmRate;
+int16_t  currentRpmRate = rpmAccelerationRate;
 
 float rpm2millilitreCw = 3;
 float rpm2millilitreCcw = 3;
 
 ClickEncoder *encoder;
 
-volatile uint8_t nMotorCounter = 0;
+volatile uint8_t speedAdjustmentTicks = 0;
 volatile long stepCounter = 0;
 volatile long halfStepLimit = 0;
 
@@ -87,33 +123,48 @@ volatile long halfStepLimit = 0;
 uint32_t totalMotorUptime = 0;		// motor uptime in seconds
 double   totalPumpedVolume = 0;	    // total pumped volume in litres
 float    lastCurrentRpm = 0;
-const uint16_t volumeIntegralPeriodMs = 1000; 
+
+#if ENABLE_MOISTURE_SENSOR
+long lastSensorReadTime = 0;
+bool haltOnHoseFailureFlag = 0;
+#endif
+
+#if ENABLE_UPTIME_CALC
+const uint16_t volumeIntegralPeriodMs = 1000;
 uint32_t eepromSaveTotalsPeriodMs = 60000;
-uint32_t eepromRewriteCounter = 0;  // ATMEL gives 100000 cell rewrite lifetime
-							 		// With eeprom update once in every minute we will hold for 100000/60/24 ~ 70 days
+uint32_t eepromRewriteCounter = 0;  // ATMEL gives 100000 cell rewrites lifetime
+									// With eeprom update once in every minute we will hold for 100000/60/24 ~ 70 days
 									// So for the first 10 minutes we will save uptime every minute
 									//            after 10 minutes - every 5 minutes
 									//            after 1 hour - every 10 minutes
-									  	
+#endif // ENABLE_UPTIME_CALC
+
+#if ENABLE_EXTERNAL_CONTROL
+	// User may want to halt the motor manually. We will use this flag to ignore external input.
+bool extControlDisabledFlag = true;
+uint32_t lastRpmSetTime = 0;
+volatile float extPwmDutyCycle = 0;
+volatile uint16_t extPwmPeriodNum = 0;
+const double extCtrlAvgWeight = 0.01;
+#endif
 
 // Debug helpers
 #if DEBUG_ENABLED
-	#define DEBUG_BEGIN(baudRate)	Serial.begin(baudRate)
-										// Prints debug message
-	#define DEBUG_PRINT(...)		Serial.print(__VA_ARGS__)
-	#define DEBUG_PRINTLN(...)		Serial.println(__VA_ARGS__)
-										// Debug block may contain any code that we'll be switched off when debugging disabled
-	#define DEBUG_BLOCK(block)		do { block; } while(0)	
+#define DEBUG_BEGIN(baudRate)	Serial.begin(baudRate)
+									// Prints debug message
+#define DEBUG_PRINT(...)		Serial.print(__VA_ARGS__)
+#define DEBUG_PRINTLN(...)		Serial.println(__VA_ARGS__)
+									// Debug block may contain any code that we'll be switched off when debugging disabled
+#define DEBUG_BLOCK(block)		do { block; } while(0)	
 #else
-	#define DEBUG_BEGIN(...)
-	#define DEBUG_PRINT(...)   
-	#define DEBUG_PRINTLN(...) 
-	#define DEBUG_BLOCK(block)
+#define DEBUG_BEGIN(...)
+#define DEBUG_PRINT(...)   
+#define DEBUG_PRINTLN(...) 
+#define DEBUG_BLOCK(block)
 #endif
 
 // EEPROM handling
-//========================================================================
-extern void eepromWriteTotals();
+//================================================================================================
 void eepromWrite() {
 	eepromRewriteCounter++;
 
@@ -123,18 +174,18 @@ void eepromWrite() {
 	EEPROM.put(6, rpm2millilitreCcw);
 	EEPROM.put(10, lastTargetRpm);
 	EEPROM.put(15, targetVolume);
-#if !ENABLE_UPTIME_CALC
-}
-#else
+#if ENABLE_UPTIME_CALC
 	eepromWriteTotals();
+#endif
 }
 
-void eepromWriteTotals(){
+#if ENABLE_UPTIME_CALC
+void eepromWriteTotals() {
 	EEPROM.put(20, totalMotorUptime);
 	EEPROM.put(25, totalPumpedVolume);
 	EEPROM.put(30, eepromRewriteCounter);
 }
-#endif
+#endif  // !ENABLE_UPTIME_CALC
 
 bool eepromRead() {
 	const uint8_t magic = EEPROM.read(0);
@@ -157,37 +208,41 @@ bool eepromRead() {
 }
 
 // Setup()
-//========================================================================
+//================================================================================================
 void setup() {
 	DEBUG_BEGIN(115200);
 
 	lcd.begin();
 	lcd.clear();
-	lcd.backlight();	
+	lcd.backlight();
 
 	// Show invitation
 	lcd.setCursor(0, 0);
 	lcd.print(F("Peristaltic pump"));
 	lcd.setCursor(0, 1);
-	lcd.print(String(F("      v")) + String(firmwareVersion, 1)+String(F("      ")));	
+	lcd.print(String(F("      v")) + String(firmwareVersion, 1) + String(F("      ")));
 
-	encoder = new ClickEncoder(3, 4, 2, 2);
+	encoder = new ClickEncoder(pinEncoderA, pinEncderB, pinEncoderButton, ENCODER_STEP_PER_NOTCH);
 
 	if (!eepromRead())
 		DEBUG_PRINTLN(F("Failed to read EEPROM values"));
 
 	// Setup pins
-	pinMode(pinStep,   OUTPUT);
-	pinMode(pinDir,    OUTPUT);
+	pinMode(pinStep, OUTPUT);
+	pinMode(pinDir, OUTPUT);
 	pinMode(pinEnable, OUTPUT);
-	pinMode(pinMS1,    OUTPUT);
-	pinMode(pinMS2,    OUTPUT);
-	pinMode(pinMS2,    OUTPUT);
-	pinMode(pinSleep,  OUTPUT);
-	pinMode(pinReset,  OUTPUT);
+	pinMode(pinMS1, OUTPUT);
+	pinMode(pinMS2, OUTPUT);
+	pinMode(pinMS2, OUTPUT);
+	pinMode(pinSleep, OUTPUT);
+	pinMode(pinReset, OUTPUT);
 
 #if	ENABLE_MOISTURE_SENSOR
-	pinMode(pinMoistureSensor,  INPUT);
+	pinMode(pinMoistureSensor, INPUT);
+#endif
+
+#if ENABLE_EXTERNAL_CONTROL
+	pinMode(pinExtControl, INPUT);
 #endif
 
 	// Stepper driver setup
@@ -196,7 +251,7 @@ void setup() {
 	digitalWrite(pinSleep, HIGH);
 
 	// Choose microstepping
-	switch(microStepping){
+	switch (microStepping) {
 	case 1:
 		digitalWrite(pinMS1, LOW); 		digitalWrite(pinMS2, LOW); 		digitalWrite(pinMS3, LOW);
 		break;
@@ -213,13 +268,13 @@ void setup() {
 		digitalWrite(pinMS1, HIGH);		digitalWrite(pinMS2, HIGH);		digitalWrite(pinMS3, HIGH);
 		break;
 	}
-	
+
 
 	cli();
 	// set timer1 to driver the stepper motor
 	TCCR1A = 0; // set TCCR1A register to 0
 	TCCR1B = 0; // set TCCR1B register to 0
-	TCNT1  = 0; // set counter value to 0
+	TCNT1 = 0; // set counter value to 0
 
 	TCCR1B |= _BV(WGM12);   // turn on CTC mode
 	TCCR1A |= _BV(COM1B0);  // connect pin to interrupt
@@ -234,11 +289,16 @@ void setup() {
 	TCNT2 = 0;  // initialize counter value to 0
 
 	// set compare match register for 1khz increments
-	OCR2A = 249; // (16 000 000) / (1000 * 64) - 1;
+	OCR2A = 249;  // (16 000 000) / (1000 * 64) - 1;
 
 	TCCR2A |= _BV(WGM21);  // turn on CTC mode
-	TCCR2B |= _BV(CS22);   // Set CS21 bit for 64 prescaler
+	TCCR2B |= _BV(CS22);   // Set CS22 bit for 64 prescaler
+
 	TIMSK2 |= _BV(OCIE2A); // enable timer compare interrupt
+
+#if ENABLE_EXTERNAL_CONTROL && (EXTERNAL_CONTROL_TYPE == 0 || EXTERNAL_CONTROL_TYPE == 1)
+	attachInterrupt(EXTERNAL_CONTROL_TYPE, ExternalInputISR, CHANGE);              // Attach interrupt handler
+#endif
 
 	sei();  // allow interrupts	
 
@@ -251,9 +311,9 @@ void setup() {
 	String line;
 	uint32_t tmpMotorUptime = totalMotorUptime;
 	if (totalMotorUptime >= 86400)		  line += String(int(totalMotorUptime / 86400)) + String(F("d "));
-	if ((tmpMotorUptime%=86400) > 3600)   line += String(int(tmpMotorUptime / 3600)) + String(F("h "));
-	if ((tmpMotorUptime%=3600) > 60)	  line += String(int(tmpMotorUptime / 60)) + String(F("m "));
-	if ( totalMotorUptime < 86400)		  line += String(int(tmpMotorUptime%60)) + String(F("s"));
+	if ((tmpMotorUptime %= 86400) > 3600)   line += String(int(tmpMotorUptime / 3600)) + String(F("h "));
+	if ((tmpMotorUptime %= 3600) > 60)	  line += String(int(tmpMotorUptime / 60)) + String(F("m "));
+	if (totalMotorUptime < 86400)		  line += String(int(tmpMotorUptime % 60)) + String(F("s"));
 	lcd.print(line);
 	DEBUG_PRINT(F("Total motor uptime: "));
 	DEBUG_PRINTLN(line);
@@ -271,7 +331,7 @@ void setup() {
 	delay(1000);
 #else
 	delay(2000);
-#endif
+#endif  // ENABLE_UPTIME_CALC
 }
 
 
@@ -283,15 +343,15 @@ ISR(TIMER1_COMPB_vect) {
 
 	// Slowdown motor when at the and of specific water volume pumping
 	// We do all calculations here, since it does not affect overall performance in our case
-	if( slowdownLimit < stepCounter)
-		if(slowdownLimit == 0) {
+	if (slowdownLimit < stepCounter)
+		if (slowdownLimit == 0) {
 			slowdownLimit = halfStepLimit - 1L * slowdownRevolutions * stepsPerRevolution;
 		} else {
-			targetRpm = slowdownFactor*((targetRpm>0)?volumeRpm:-volumeRpm);
+			targetRpm = slowdownFactor * ((targetRpm > 0) ? volumeRpm : -volumeRpm);
 			slowdownLimit = halfStepLimit + 1;
 		}
 
-	if(halfStepLimit < stepCounter) {
+	if (halfStepLimit < stepCounter) {
 		halfStepLimit = 0;
 		stepCounter = 0;
 		slowdownLimit = 0;
@@ -305,8 +365,37 @@ ISR(TIMER1_COMPB_vect) {
 //===============================================================================================================
 ISR(TIMER2_COMPA_vect) {
 	encoder->service();
-	nMotorCounter++;
+	speedAdjustmentTicks++;
 }
+#if ENABLE_EXTERNAL_CONTROL && (EXTERNAL_CONTROL_TYPE ==0 || EXTERNAL_CONTROL_TYPE == 1)
+void ExternalInputISR() {
+	static unsigned long lastFall;
+	static unsigned long lastRise;
+	static unsigned long lastCall;
+	static bool newPeriod = 1;
+
+	float pwmPeriod;
+	float pwmOnTime;
+	float now = micros();
+
+	if (digitalRead(2 + EXTERNAL_CONTROL_TYPE) == LOW) {
+		// Falling edge
+		lastFall = now;
+		newPeriod = 1;
+	} else if (newPeriod) {
+		// Rising edge
+		pwmPeriod = now - lastRise;
+		pwmOnTime = lastFall - lastRise;
+		const double duty = pwmOnTime / pwmPeriod;
+
+		if (duty >= 0 && duty <= 1) extPwmDutyCycle = (extPwmDutyCycle + extCtrlAvgWeight * duty) / (1 + extCtrlAvgWeight);
+
+		lastRise = now;
+		newPeriod = 0;
+		extPwmPeriodNum++;
+	}
+}
+#endif
 
 // Set motor speed
 //===============================================================================================================
@@ -340,7 +429,7 @@ void setMotorSpeed(float rpm) {
 
 // Display on-screen data
 //===============================================================================================================
-char buffer[20] = {0};
+char buffer[20] = { 0 };
 void displayPumpData() {
 	size_t pos = 0;
 	lcd.setCursor(0, 0);
@@ -353,31 +442,32 @@ void displayPumpData() {
 		lcd.print(buffer);
 		break;
 	case MODE_LITRES_PER_HOUR:
-		#if DISPLAY_LITRES_PER_HOUR
-			lcd.print(F("Flow rate, l/hr "));
-		#else
-			lcd.print(F("Flow rate, ml/m "));
-		#endif
-		
+	#if DISPLAY_LITRES_PER_HOUR
+		lcd.print(F("Flow rate, l/hr "));
+	#else
+		lcd.print(F("Flow rate, ml/m "));
+	#endif
+
 		lcd.setCursor(0, 1);
 		{
 			const float rpm2ml = (currentRpm > 0) ? rpm2millilitreCw : rpm2millilitreCcw;
-			#if DISPLAY_LITRES_PER_HOUR
-				const int clph = round(currentRpm * rpm2ml * 0.6);  // 60 / 1000 * 10
-				const int tlph = round(targetRpm * rpm2ml * 0.6);
+		#if DISPLAY_LITRES_PER_HOUR
+			const int clph = round(currentRpm * rpm2ml * 0.6);  // 60 / 1000 * 10
+			const int tlph = round(targetRpm * rpm2ml * 0.6);
 
-        // Was it so difficult to add normal floating point support to sprintf()!?
-				sprintf(buffer, "%+3d.%1d SET: %+3d.%1d", clph/10, abs(clph%10), tlph/10, abs(tlph%10));
-        if(currentRpm<0 && clph>-10) buffer[1]  = '-';
-        if(targetRpm<0 && tlph>-10)  buffer[12] = '-';
-			#else
-				sprintf(buffer, "%-+5d SET: %+5d", (int)round(currentRpm*factor), (int)round(targetRpm*factor));
-			#endif
-      lcd.print(buffer);
+			// Was it so difficult to add normal floating point support to sprintf()!?
+			sprintf(buffer, "%+3d.%1d SET: %+3d.%1d", clph / 10, abs(clph % 10), tlph / 10, abs(tlph % 10));
+			if (currentRpm<0 && clph>-10) buffer[1] = '-';
+			if (targetRpm<0 && tlph>-10)  buffer[12] = '-';
+		#else
+			sprintf(buffer, "%-+5d SET: %+5d", (int)round(currentRpm*factor), (int)round(targetRpm*factor));
+		#endif
+			lcd.print(buffer);
 		}
 		break;
+	#if ENABLE_MODE_BOTTLING
 	case MODE_BOTTLING:
-		if(halfStepLimit == 0) {
+		if (halfStepLimit == 0) {
 			lcd.print(F("Bottling volume "));
 			lcd.setCursor(0, 1);
 			pos += lcd.print(targetVolume);
@@ -386,12 +476,28 @@ void displayPumpData() {
 		} else {
 			const int progress = int(17.0*stepCounter / halfStepLimit);
 			lcd.print(F("Pumping water "));
-			(targetVolume>0)?lcd.print(F("+ ")):lcd.print(F("- "));
+			(targetVolume > 0) ? lcd.print(F("+ ")) : lcd.print(F("- "));
 			lcd.setCursor(0, 1);
 			while (pos++ < progress) lcd.write(255);
 			while (pos++ < 16) lcd.write(32);
 		}
 		return;
+	#endif
+	#if ENABLE_EXTERNAL_CONTROL 
+	case MODE_EXT_CONTROL:
+		lcd.print(F("External control"));
+		lcd.setCursor(0, 1);
+		if (extControlDisabledFlag) {
+			sprintf(buffer, "Stopped (%d%%)", int(extPwmDutyCycle * 100));
+		} else {
+			const int clph = round(currentRpm * rpm2millilitreCw * 0.6);  // 60 / 1000 * 10
+			sprintf(buffer, "%d.%1d l/h (%d%%)", clph / 10, abs(clph % 10), int(extPwmDutyCycle * 100));
+		}
+		pos = lcd.print(buffer);
+		while (pos++ < 16) lcd.write(32);
+
+		return;
+	#endif
 	}
 }
 
@@ -401,16 +507,14 @@ void displayPumpData() {
 uint8_t nStateMachine = 0;
 void loop() {
 	static long lastTime = 0;
-	const uint32_t loopMillis = millis();
-	const double rpm2ml = (targetRpm>0)?rpm2millilitreCw:rpm2millilitreCcw;
+	const uint32_t now = millis();
+	const double rpm2ml = (targetRpm > 0) ? rpm2millilitreCw : rpm2millilitreCcw;
 
 #if	ENABLE_MOISTURE_SENSOR
-	static long lastSensorReadTime = 0;
-	static bool haltOnHoseFailureFlag = 0;
-	if( !haltOnHoseFailureFlag && loopMillis-lastSensorReadTime > 777) {
+	if (!haltOnHoseFailureFlag && now - lastSensorReadTime > 777) {
 		// Read the input on moisture sensor pin
 		int sensorValue = (MOISTURE_SENSOR_THRESHOLD > 1) ? analogRead(pinMoistureSensor) : digitalRead(pinMoistureSensor);
-		if(sensorValue>=MOISTURE_SENSOR_THRESHOLD) {
+		if (sensorValue >= MOISTURE_SENSOR_THRESHOLD) {
 			lcd.clear();
 			lcd.print("  Hose failure  ");
 			lcd.setCursor(0, 1);
@@ -420,10 +524,10 @@ void loop() {
 
 			haltOnHoseFailureFlag = true;
 		}
-		lastSensorReadTime = loopMillis;
+		lastSensorReadTime = now;
 	}
-	if(haltOnHoseFailureFlag) {
-		currentRpmRate = haltRate;
+	if (haltOnHoseFailureFlag) {
+		currentRpmRate = rpmHaltRate;
 		targetRpm = 0;
 		adjustMotorSpeed();
 		return;
@@ -437,110 +541,160 @@ void loop() {
 	static long eepromWriteCounter = 0;
 
 	// Count pumped volume
-	if( loopMillis-lastIntegralTime > volumeIntegralPeriodMs ) {
-		if (abs(currentRpm) > 0) totalMotorUptime += volumeIntegralPeriodMs/1000;
-		const double rpmIntegral = 0.5*(currentRpm + ((currentRpm*lastCurrentRpm>0)?1:-1)*lastCurrentRpm)/60 * volumeIntegralPeriodMs/1000;
+	if (now - lastIntegralTime > volumeIntegralPeriodMs) {
+		if (abs(currentRpm) > 0) totalMotorUptime += volumeIntegralPeriodMs / 1000;
+		const double rpmIntegral = 0.5*(currentRpm + ((currentRpm*lastCurrentRpm > 0) ? 1 : -1)*lastCurrentRpm) / 60 * volumeIntegralPeriodMs / 1000;
 		totalPumpedVolume += rpm2ml * abs(rpmIntegral) / 1000;
-		
+
 		DEBUG_BLOCK({
-			if(abs(rpmIntegral)>0){
+			if (abs(rpmIntegral) > 0) {
 				String line;
 				uint32_t tmpMotorUptime = totalMotorUptime;
 				if (totalMotorUptime >= 86400)		  line += String(int(totalMotorUptime / 86400)) + String(F("d "));
-				if ((tmpMotorUptime%=86400) > 3600)   line += String(int(tmpMotorUptime / 3600)) + String(F("h "));
-				if ((tmpMotorUptime%=3600) > 60)	  line += String(int(tmpMotorUptime / 60)) + String(F("m "));
-				line += String(int(tmpMotorUptime%60)) + String(F("s"));
+				if ((tmpMotorUptime %= 86400) > 3600)   line += String(int(tmpMotorUptime / 3600)) + String(F("h "));
+				if ((tmpMotorUptime %= 3600) > 60)	  line += String(int(tmpMotorUptime / 60)) + String(F("m "));
+				line += String(int(tmpMotorUptime % 60)) + String(F("s"));
 				DEBUG_PRINT(F("Total motor uptime: "));
 				DEBUG_PRINT(line);
 
 				DEBUG_PRINT(F(". Total volume pumped: "));
 				DEBUG_PRINT(totalPumpedVolume, 3);
 				DEBUG_PRINTLN(F("L"));
-				
-			}});
+
+			} });
 
 		lastCurrentRpm = currentRpm;
-		lastIntegralTime = loopMillis;
+		lastIntegralTime = now;
 	}
 
 	// Save totals to eeprom
-	if(totalMotorUptime > lastTotalMotorUptime && loopMillis-lastEepromSaveTime>eepromSaveTotalsPeriodMs){
+	if (totalMotorUptime > lastTotalMotorUptime && now - lastEepromSaveTime > eepromSaveTotalsPeriodMs) {
 		eepromWriteTotals();
 		lastTotalMotorUptime = totalMotorUptime;
-		lastEepromSaveTime = loopMillis;
+		lastEepromSaveTime = now;
 		// Increase eeprom save period to extend cell life
-		if (++eepromWriteCounter > 10)		eepromSaveTotalsPeriodMs =  5*60*1000; // 5 minutes
-		else if (eepromWriteCounter > 20)	eepromSaveTotalsPeriodMs = 10*60*1000; // 10 minutes
+		if (++eepromWriteCounter > 10)		eepromSaveTotalsPeriodMs = 5 * 60 * 1000; // 5 minutes
+		else if (eepromWriteCounter > 20)	eepromSaveTotalsPeriodMs = 10 * 60 * 1000; // 10 minutes
 	}
+#endif  // ENABLE_UPTIME_CALC
+
+#if ENABLE_EXTERNAL_CONTROL 
+	if (pumpMode == MODE_EXT_CONTROL && now - lastRpmSetTime > 1000) {  // check duty cycle 5 time per second 
+		if (extControlDisabledFlag) {
+			targetRpm = 0;
+		} else {
+		#if EXTERNAL_CONTROL_TYPE > 1
+			targetRpm = 1.0*maxRpm*analogRead(pinExtControl) / 255;
+		#else
+			if (extPwmPeriodNum < 1) // no pulse on input pin means either 0% or 100%
+				extPwmDutyCycle = digitalRead(pinExtControl);
+			DEBUG_PRINT(F("PWM frequency: "));		DEBUG_PRINT(extPwmPeriodNum);		DEBUG_PRINTLN(F(" Hz"));
+			DEBUG_PRINT(F("PWM duty cycle: "));		DEBUG_PRINT(extPwmDutyCycle * 100, 2);		DEBUG_PRINTLN(F("%"));
+			targetRpm = maxRpm * extPwmDutyCycle;
+			extPwmPeriodNum = 0;
+		#endif
+		}		
+
+		if (targetRpm > maxRpm) targetRpm = maxRpm;
+		if (targetRpm < -maxRpm) targetRpm = -maxRpm;
+		if (abs(targetRpm) < minRpm) targetRpm = 0;
+
+		lastRpmSetTime = now;
+	}
+
 #endif
 
 	// process encoder rotation
 	float delta = encoder->getValue();
 	if (delta) {
-		if (pumpMode == MODE_BOTTLING) { // don't change volume if pumping right now
-			if(halfStepLimit<1) {
+		currentRpmRate = rpmAccelerationRate;
+
+		switch (pumpMode) {
+		case MODE_RPM:
+			targetRpm += delta;
+			targetRpm = round(targetRpm);
+			break;
+		case MODE_LITRES_PER_HOUR:
+			if (DISPLAY_LITRES_PER_HOUR) {
+				const double clph = round(targetRpm*rpm2ml*0.6) + delta;
+				targetRpm = clph / rpm2ml / 0.6;
+			} else {
+				const double cmlpm = round(targetRpm*rpm2ml) + delta;
+				targetRpm = cmlpm / rpm2ml;
+			}
+			break;
+		#if ENABLE_MODE_BOTTLING
+		case MODE_BOTTLING:
+			// don't change volume if pumping right now
+			if (halfStepLimit < 1) {
 				targetVolume += delta;
 				eepromWrite();
 			}
-		} else {
-			currentRpmRate = rpmRate;
+			break;
+		#endif
+		#if ENABLE_EXTERNAL_CONTROL
+		case MODE_EXT_CONTROL:
+			break;
+		#endif
+		default:
+			break; // no actions here
+		} // switch (pumpMode) 
 
-			switch (pumpMode)     {
-			case MODE_RPM: 
-				targetRpm += delta;
-				targetRpm = round(targetRpm);
-				break;
-			case MODE_LITRES_PER_HOUR:        
-				if(DISPLAY_LITRES_PER_HOUR) {
-					const double clph = round(targetRpm*rpm2ml*0.6) + delta;
-					targetRpm = clph / rpm2ml / 0.6;
-				} else {
-					const double cmlpm = round(targetRpm*rpm2ml) + delta;
-					targetRpm = cmlpm / rpm2ml;
-				}        
-				break;
-			} // switch (pumpMode) 
+		if (targetRpm > maxRpm) targetRpm = maxRpm;
+		if (targetRpm < -maxRpm) targetRpm = -maxRpm;
+		if (abs(targetRpm) < minRpm) targetRpm = 0;
 
-			if (targetRpm > maxRpm) targetRpm = maxRpm;
-			if (targetRpm < -maxRpm) targetRpm = -maxRpm;
-			if (abs(targetRpm) < minRpm) targetRpm = 0;
-		} // if (pumpMode == MODE_BOTTLING)
 		displayPumpData();
 	} // if (delta) 
 
 	// process encoder buttons
 	switch (encoder->getButton()) {
 	case ClickEncoder::DoubleClicked:
-		switch (pumpMode) 		{
-		case MODE_RPM: 
+		switch (pumpMode) {
+		case MODE_RPM:
 		case MODE_LITRES_PER_HOUR:
 			if (abs(targetRpm) > 1e-2) {
-				currentRpmRate = haltRate;
+				currentRpmRate = rpmHaltRate;
 				lastTargetRpm = targetRpm;
 				targetRpm = 0;
 				eepromWrite();
 			} else {
-				currentRpmRate = rpmRate;
+				currentRpmRate = rpmAccelerationRate;
 				targetRpm = lastTargetRpm;
 			}
 			break;
+		#if ENABLE_MODE_BOTTLING
 		case MODE_BOTTLING:
 			if (halfStepLimit > 0) {
 				halfStepLimit = 0;
 			} else {
-				currentRpmRate = rpmRate;
+				currentRpmRate = rpmAccelerationRate;
 				stepCounter = 0;
-				halfStepLimit = (long) abs( 2.0*targetVolume / ((targetVolume>0)?rpm2millilitreCw:rpm2millilitreCcw) * stepsPerRevolution );
+				halfStepLimit = (long)abs(2.0*targetVolume / ((targetVolume > 0) ? rpm2millilitreCw : rpm2millilitreCcw) * stepsPerRevolution);
 				TIMSK1 |= _BV(OCIE1B);  // enable timer compare interrupt
-				targetRpm = (targetVolume>0)?volumeRpm:-volumeRpm;
+				targetRpm = (targetVolume > 0) ? volumeRpm : -volumeRpm;
 			}
 			break;
+		#endif
+		#if ENABLE_EXTERNAL_CONTROL	
+		case MODE_EXT_CONTROL:
+			extControlDisabledFlag = !extControlDisabledFlag;
+			if (extControlDisabledFlag) {
+				currentRpmRate = rpmHaltRate;
+				targetRpm = 0;
+			} else {
+				currentRpmRate = rpmAccelerationRate;
+			}
+			break;
+		#endif // ENABLE_EXTERNAL_CONTROL
+		default:
+			break; // no actions here
 		} // switch (pumpMode) 
 		break;
 	case ClickEncoder::Clicked:
 		encoder->setAccelerationEnabled(true);
-		switch (pumpMode) 		{
-		case MODE_RPM: 
+		switch (pumpMode) {
+		case MODE_RPM:
 			pumpMode++;
 			{
 				float factor = (currentRpm > 0) ? rpm2millilitreCw : rpm2millilitreCcw;
@@ -548,27 +702,59 @@ void loop() {
 			}
 			break;
 		case MODE_LITRES_PER_HOUR:
-			pumpMode = (DISABLE_MODE_BOTTLING) ? MODE_RPM : MODE_BOTTLING;
-			
-			if(!DISABLE_MODE_BOTTLING) {  // halt pump
-        currentRpmRate = haltRate; 
-			  targetRpm = 0;
-			}
+		#if ENABLE_MODE_BOTTLING 
+			pumpMode = MODE_BOTTLING;
+			// halt pump
+			currentRpmRate = rpmHaltRate;
+			targetRpm = 0;
+		#elif ENABLE_EXTERNAL_CONTROL		
+			pumpMode = MODE_EXT_CONTROL;
+			// halt pump
+			currentRpmRate = rpmHaltRate;
+			targetRpm = 0;
+		#else
+			pumpMode = MODE_RPM;
+		#endif // MODE_BOTTLING			
 			break;
+		#if ENABLE_MODE_BOTTLING
 		case MODE_BOTTLING:
-			if(halfStepLimit<1) // dont switch if pumping right now
+			if (halfStepLimit < 1) // dont switch if pumping right now
+			#if ENABLE_EXTERNAL_CONTROL
+				pumpMode = MODE_EXT_CONTROL;
+		#else
 				pumpMode = MODE_RPM;
+		#endif
 			break;
+		#endif
+		#if ENABLE_EXTERNAL_CONTROL
+		case MODE_EXT_CONTROL:
+			pumpMode = MODE_RPM;
+			// halt pump
+			currentRpmRate = rpmHaltRate;
+			targetRpm = 0;
+			extControlDisabledFlag = 1;  // user should confirm pump start every time in ext mode
+			break;
+		#endif // ENABLE_EXTERNAL_CONTROL
+
+		default:
+			pumpMode = MODE_RPM;
+			break; // no actions here
 		}
 		eepromWrite();
 		displayPumpData();
 		break;
 	case ClickEncoder::Held:
-		// don't start calibration if pumping right now
+		// don't start calibration if pumping right now or in external control mode 
+	#if ENABLE_MODE_BOTTLING
 		if (pumpMode == MODE_BOTTLING && halfStepLimit > 1)
 			break;
+	#endif
+	#if ENABLE_EXTERNAL_CONTROL
+		if (pumpMode == MODE_EXT_CONTROL)
+			break;
+	#endif // ENABLE_EXTERNAL_CONTROL
 
-		if(calibratePump()) {
+		if (calibratePump()) {
 			lcd.setCursor(0, 0);
 			lcd.print(F("Pump calibration"));
 			lcd.setCursor(0, 1);
@@ -581,7 +767,7 @@ void loop() {
 			lcd.setCursor(0, 1);
 			lcd.print(F("was canceled    "));
 		}
-		lastTime = loopMillis + 1500;
+		lastTime = now + 1500;
 
 		// Wait button release
 		while (encoder->getButton() == ClickEncoder::Held)
@@ -592,9 +778,9 @@ void loop() {
 	} // switch (encoder->getButton())
 
 	// display motor speed twice per second
-	if (loopMillis > lastTime + ((halfStepLimit>0)?100:500)) {
+	if (now > lastTime + ((halfStepLimit > 0) ? 100 : 500)) {
 		displayPumpData();
-		lastTime = loopMillis;
+		lastTime = now;
 	}
 
 	// every 10 ms change motor speed
@@ -604,8 +790,8 @@ void loop() {
 // Alter motor speed when accelerating / decelerating
 //========================================================================
 
-void adjustMotorSpeed(){
-	if (nMotorCounter > 10) {
+void adjustMotorSpeed() {
+	if (speedAdjustmentTicks > 10) {
 		if (targetRpm - currentRpm > 1e-5) {
 			currentRpm += 0.01 * currentRpmRate;
 			if (currentRpm > targetRpm)  currentRpm = targetRpm;
@@ -617,7 +803,7 @@ void adjustMotorSpeed(){
 			if (currentRpm < targetRpm)   currentRpm = targetRpm;
 			setMotorSpeed(currentRpm);
 		}
-		nMotorCounter = 0;
+		speedAdjustmentTicks = 0;
 	}
 }
 
@@ -634,13 +820,13 @@ bool calibratePump() {
 	while (abs(currentRpm) > 1e-2) {
 		targetRpm = 0;
 		if (targetRpm - currentRpm > 1e-5) {
-			currentRpm += 0.01 * haltRate;
+			currentRpm += 0.01 * rpmHaltRate;
 			if (currentRpm > targetRpm)  currentRpm = targetRpm;
 			setMotorSpeed(currentRpm);
 		}
 
 		if (targetRpm - currentRpm < -1e-5) {
-			currentRpm -= 0.01 * haltRate;
+			currentRpm -= 0.01 * rpmHaltRate;
 			if (currentRpm < targetRpm)   currentRpm = targetRpm;
 			setMotorSpeed(currentRpm);
 		}
@@ -666,15 +852,15 @@ bool calibratePump() {
 
 	lcd.setCursor(0, 0);
 	lcd.print(F("Select direction"));
-	
-	
+
+
 	encoder->setAccelerationEnabled(false);
 	int selection = 0;
 	do {
 		int delta = encoder->getValue();
 		if (delta) {
 			selection = (selection + delta + 3) % 3;
-		}		
+		}
 
 		lcd.setCursor(0, 1);
 		switch (selection) {
@@ -703,9 +889,9 @@ bool calibratePump() {
 		delay(1);
 	} while (1);
 	encoder->setAccelerationEnabled(true);
-	
+
 	const int revolutionNum = 200;
-	if(selection!=1) {
+	if (selection != 1) {
 		lcd.setCursor(0, 0);
 		lcd.print(F("Reset scales and"));
 		lcd.setCursor(0, 1);
@@ -730,7 +916,7 @@ bool calibratePump() {
 		lcd.print(F("                "));
 
 		// Pump some water
-		halfStepLimit =  2L * revolutionNum * stepsPerRevolution;
+		halfStepLimit = 2L * revolutionNum * stepsPerRevolution;
 		TIMSK1 |= _BV(OCIE1B);  // enable timer1 compare interrupt
 		targetRpm = volumeRpm;
 
@@ -785,7 +971,7 @@ bool calibratePump() {
 		} while (1);
 	}
 
-	if(selection!=0) {
+	if (selection != 0) {
 		lcd.setCursor(0, 0);
 		lcd.print(F("Reset scales and"));
 		lcd.setCursor(0, 1);
@@ -809,7 +995,7 @@ bool calibratePump() {
 		lcd.print(F("                "));
 
 		// Pump some water
-		halfStepLimit =  2L * revolutionNum * stepsPerRevolution;
+		halfStepLimit = 2L * revolutionNum * stepsPerRevolution;
 		TIMSK1 |= _BV(OCIE1B);  // enable timer1 compare interrupt
 		targetRpm = -volumeRpm;
 
