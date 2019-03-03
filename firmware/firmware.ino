@@ -12,15 +12,15 @@ const double firmwareVersion = 2.0;
 #define DEBUG_ENABLED 0
 
 // EEPROM magic byte, increment this to clear EEPROM settings
-#define MAGIC_BYTE 2
+#define MAGIC_BYTE 99
 
 // Show litres per hour instead of millilitres per minute
 #define DISPLAY_LITRES_PER_HOUR 1
 
 // Pump stops when enters MODE_BOTTLING, if you do not this mode it you can switch it off
-#define ENABLE_MODE_BOTTLING 0
+#define ENABLE_MODE_BOTTLING 1
 
-// Starting from v2.0 pump save total motor uptime & pumped volume to eeprom, disable it if not used
+// Starting from v2.0 pump saves total motor uptime & pumped volume to eeprom, disable it if not used
 #define ENABLE_UPTIME_CALC 1
 
 // Enable external speed control from moonshine controller, e.g. HelloDistiller
@@ -39,7 +39,10 @@ const double firmwareVersion = 2.0;
 // Note: A6 & A7 pins cannot do digitalRead() and should use analog input only, i.e. threshold>2
 #define MOISTURE_SENSOR_THRESHOLD 100 
 
-LiquidCrystal_I2C lcd(0x3F, 16, 2);
+#define LCD_I2C_ADDRESS 0x27
+
+#define ENCODER_STEP_PER_NOTCH 4
+
 
 // Hardware Settings
 //================================================================================================
@@ -61,23 +64,32 @@ const uint8_t pinMoistureSensor = A6;
 
 #if ENABLE_EXTERNAL_CONTROL 
 #if EXTERNAL_CONTROL_TYPE==0
-const uint8_t pinExtControl = 2;  // Interrupt 0
+	const uint8_t pinExtControl = 2;  // Interrupt 0
 #elif EXTERNAL_CONTROL_TYPE==1
-const uint8_t pinExtControl = 3;  // Interrupt 1
+	const uint8_t pinExtControl = 3;  // Interrupt 1
 #else
-const uint8_t pinExtControl = A7;  // Analog input pin
+	const uint8_t pinExtControl = A7;  // Analog input pin
 #endif
 #endif
 
-const uint8_t pinEncoderA = 3;
-const uint8_t pinEncderB = 4;
-const uint8_t pinEncoderButton = 5;
+#if ENABLE_EXTERNAL_CONTROL &&  EXTERNAL_CONTROL_TYPE==0
+	const uint8_t pinEncoderButton = 5;
+#else
+	const uint8_t pinEncoderButton = 2;
+#endif
+#if ENABLE_EXTERNAL_CONTROL &&  EXTERNAL_CONTROL_TYPE==1
+	const uint8_t pinEncoderA  = 5;
+#else
+	const uint8_t pinEncoderA  = 3;
+#endif
+const uint8_t pinEncoderB  = 4;
 
-#define ENCODER_STEP_PER_NOTCH 2
+
+
 
 // Speed & motor setup
 const int8_t    microStepping = 8;
-const int16_t   maxRpm = 465;			// Upper limit, don't increase RMP above this
+const int16_t   maxRpm = 450;			// Upper limit, don't increase RMP above this
 const float     minRpm = 0.01;			// Lower limit, set RPM=0
 const int16_t   rpmAccelerationRate = 50;	// RPM increase per second when user change speed
 const int16_t   rpmHaltRate = 200;		// RPM increase per second when motor halts
@@ -103,6 +115,7 @@ const float   slowdownFactor = 0.2;
 #endif
 
 int8_t  pumpMode = 0;
+LiquidCrystal_I2C lcd(LCD_I2C_ADDRESS, 16, 2);
 
 int16_t  targetVolume = 500;
 float    targetRpm = 0;
@@ -222,7 +235,7 @@ void setup() {
 	lcd.setCursor(0, 1);
 	lcd.print(String(F("      v")) + String(firmwareVersion, 1) + String(F("      ")));
 
-	encoder = new ClickEncoder(pinEncoderA, pinEncderB, pinEncoderButton, ENCODER_STEP_PER_NOTCH);
+	encoder = new ClickEncoder(pinEncoderA, pinEncoderB, pinEncoderButton, ENCODER_STEP_PER_NOTCH);
 
 	if (!eepromRead())
 		DEBUG_PRINTLN(F("Failed to read EEPROM values"));
