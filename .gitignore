@@ -20,6 +20,9 @@
 !deps/
 !deps/*
 
+!deps/*/
+!deps/*/*
+
 !doc/
 !doc/*
 
