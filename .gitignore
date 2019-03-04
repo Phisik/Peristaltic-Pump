@@ -4,7 +4,8 @@
 # But not these files...
 !.gitignore
 !.gitattributes
-!readme.txt
+!README.md
+!LICENSE
 
 # ...even if they are in subdirectories
 !scad/
