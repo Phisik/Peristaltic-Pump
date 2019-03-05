@@ -14,8 +14,8 @@
 !pcb/
 !pcb/*
 
-!export/
-!export/*
+!stl/
+!stl/*
 
 !deps/
 !deps/*
@@ -23,8 +23,11 @@
 !deps/*/
 !deps/*/*
 
-!doc/
-!doc/*
+!docs/
+!docs/*
+
+!docs/*/
+!docs/*/*
 
 !firmware/
 !firmware/*.ino
