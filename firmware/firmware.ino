@@ -30,7 +30,8 @@ const double firmwareVersion = 2.0;
 //     0 = PWM signal from pin 2/interrupt 0, RPM = Duty*maxRpm.  Move encoder pins somewhere else.
 //     1 = PWM signal from pin 3/interrupt 1, RPM = Duty*maxRpm.  Move encoder pins somewhere else.
 //     2 = analog 0-5V input from pins A6/A7, RPM = InputVoltage*maxRpm/5V
-#define EXTERNAL_CONTROL_TYPE 0
+//     3 = set predefined RPM speed when corresponding pin is HIGH
+#define EXTERNAL_CONTROL_TYPE 3
 
 // We can use simple moisture sensor to detect hose failure
 #define ENABLE_MOISTURE_SENSOR 0
@@ -39,7 +40,7 @@ const double firmwareVersion = 2.0;
 // Note: A6 & A7 pins cannot do digitalRead() and should use analog input only, i.e. threshold>2
 #define MOISTURE_SENSOR_THRESHOLD 100 
 
-#define LCD_I2C_ADDRESS 0x27
+#define LCD_I2C_ADDRESS  0x27 // 0x3F 
 
 #define ENCODER_STEP_PER_NOTCH 4
 
@@ -63,14 +64,24 @@ const uint8_t pinMoistureSensor = A6;
 #endif
 
 #if ENABLE_EXTERNAL_CONTROL 
-#if EXTERNAL_CONTROL_TYPE==0
-	const uint8_t pinExtControl = 2;  // Interrupt 0
-#elif EXTERNAL_CONTROL_TYPE==1
-	const uint8_t pinExtControl = 3;  // Interrupt 1
-#else
-	const uint8_t pinExtControl = A7;  // Analog input pin
-#endif
-#endif
+	#if EXTERNAL_CONTROL_TYPE==0
+		const uint8_t pinExtControl = 2;  // Interrupt 0
+	#elif EXTERNAL_CONTROL_TYPE==1
+		const uint8_t pinExtControl = 3;  // Interrupt 1
+	#elif EXTERNAL_CONTROL_TYPE==2
+		const uint8_t pinExtControl = A7;  // Analog input pin
+	#elif EXTERNAL_CONTROL_TYPE==3
+		const uint8_t pinExtControl = 5;  // Starting digital pin for RPM preset selection, i.e. 6-8 for rpmPresetNum=3 
+
+		// Presets are defined in RPM, i.e. revolutions per minute
+		// If you want to set speed in ml/s or L/h you should convert it to mm/min and divide by revolution2millilitreCw constant
+		// In the example below we set target speeds to {5 ml/min, 2 L/h, -150} RPM
+		// Negative RPM values will result in CCW rotation direction
+		extern float revolution2millilitreCw;  // forward declaration
+		const uint8_t rpmPresetNum = 3;        // Number of predefined RPM speeds
+		const double  rpmPresetValue[rpmPresetNum] = {5/revolution2millilitreCw, 2*1000/60/revolution2millilitreCw, -150};
+	#endif
+#endif // #if ENABLE_EXTERNAL_CONTROL
 
 #if ENABLE_EXTERNAL_CONTROL &&  EXTERNAL_CONTROL_TYPE==0
 	const uint8_t pinEncoderButton = 5;
@@ -83,8 +94,6 @@ const uint8_t pinMoistureSensor = A6;
 	const uint8_t pinEncoderA  = 3;
 #endif
 const uint8_t pinEncoderB  = 4;
-
-
 
 
 // Speed & motor setup
@@ -123,8 +132,8 @@ float    lastTargetRpm = 0;
 float    currentRpm = 0;
 int16_t  currentRpmRate = rpmAccelerationRate;
 
-float rpm2millilitreCw = 3;
-float rpm2millilitreCcw = 3;
+float revolution2millilitreCw = 2.6;	// This value is for 9*6 silicon hose
+float revolution2millilitreCcw = 2.6;  // You should calibrate the pump by yourself
 
 ClickEncoder *encoder;
 
@@ -183,8 +192,8 @@ void eepromWrite() {
 
 	EEPROM.write(0, (uint8_t)MAGIC_BYTE);
 	EEPROM.write(1, (uint8_t)pumpMode);
-	EEPROM.put(2, rpm2millilitreCw);
-	EEPROM.put(6, rpm2millilitreCcw);
+	EEPROM.put(2, revolution2millilitreCw);
+	EEPROM.put(6, revolution2millilitreCcw);
 	EEPROM.put(10, lastTargetRpm);
 	EEPROM.put(15, targetVolume);
 #if ENABLE_UPTIME_CALC
@@ -208,8 +217,8 @@ bool eepromRead() {
 	}
 
 	pumpMode = (uint8_t)EEPROM.read(1);
-	EEPROM.get(2, rpm2millilitreCw);
-	EEPROM.get(6, rpm2millilitreCcw);
+	EEPROM.get(2, revolution2millilitreCw);
+	EEPROM.get(6, revolution2millilitreCcw);
 	EEPROM.get(10, lastTargetRpm);
 	EEPROM.get(15, targetVolume);
 #if ENABLE_UPTIME_CALC
@@ -255,7 +264,11 @@ void setup() {
 #endif
 
 #if ENABLE_EXTERNAL_CONTROL
-	pinMode(pinExtControl, INPUT);
+	#if EXTERNAL_CONTROL_TYPE == 3
+		for (int pin = 0; pin < rpmPresetNum; pin++) pinMode(pinExtControl+pin, INPUT);
+	#else
+		pinMode(pinExtControl, INPUT);
+	#endif
 #endif
 
 	// Stepper driver setup
@@ -463,7 +476,7 @@ void displayPumpData() {
 
 		lcd.setCursor(0, 1);
 		{
-			const float rpm2ml = (currentRpm > 0) ? rpm2millilitreCw : rpm2millilitreCcw;
+			const float rpm2ml = (currentRpm > 0) ? revolution2millilitreCw : revolution2millilitreCcw;
 		#if DISPLAY_LITRES_PER_HOUR
 			const int clph = round(currentRpm * rpm2ml * 0.6);  // 60 / 1000 * 10
 			const int tlph = round(targetRpm * rpm2ml * 0.6);
@@ -503,7 +516,7 @@ void displayPumpData() {
 		if (extControlDisabledFlag) {
 			sprintf(buffer, "Stopped (%d%%)", int(extPwmDutyCycle * 100));
 		} else {
-			const int clph = round(currentRpm * rpm2millilitreCw * 0.6);  // 60 / 1000 * 10
+			const int clph = round(currentRpm * revolution2millilitreCw * 0.6);  // 60 / 1000 * 10
 			sprintf(buffer, "%d.%1d l/h (%d%%)", clph / 10, abs(clph % 10), int(extPwmDutyCycle * 100));
 		}
 		pos = lcd.print(buffer);
@@ -521,7 +534,7 @@ uint8_t nStateMachine = 0;
 void loop() {
 	static long lastTime = 0;
 	const uint32_t now = millis();
-	const double rpm2ml = (targetRpm > 0) ? rpm2millilitreCw : rpm2millilitreCcw;
+	const double rpm2ml = (targetRpm > 0) ? revolution2millilitreCw : revolution2millilitreCcw;
 
 #if	ENABLE_MOISTURE_SENSOR
 	if (!haltOnHoseFailureFlag && now - lastSensorReadTime > 777) {
@@ -591,31 +604,40 @@ void loop() {
 	}
 #endif  // ENABLE_UPTIME_CALC
 
-#if ENABLE_EXTERNAL_CONTROL 
-	if (pumpMode == MODE_EXT_CONTROL && now - lastRpmSetTime > 1000) {  // check duty cycle 5 time per second 
-		if (extControlDisabledFlag) {
-			targetRpm = 0;
-		} else {
-		#if EXTERNAL_CONTROL_TYPE > 1
-			targetRpm = 1.0*maxRpm*analogRead(pinExtControl) / 255;
-		#else
-			if (extPwmPeriodNum < 1) // no pulse on input pin means either 0% or 100%
-				extPwmDutyCycle = digitalRead(pinExtControl);
-			DEBUG_PRINT(F("PWM frequency: "));		DEBUG_PRINT(extPwmPeriodNum);		DEBUG_PRINTLN(F(" Hz"));
-			DEBUG_PRINT(F("PWM duty cycle: "));		DEBUG_PRINT(extPwmDutyCycle * 100, 2);		DEBUG_PRINTLN(F("%"));
-			targetRpm = maxRpm * extPwmDutyCycle;
-			extPwmPeriodNum = 0;
-		#endif
-		}		
+#if ENABLE_EXTERNAL_CONTROL
+		if (pumpMode == MODE_EXT_CONTROL && now - lastRpmSetTime > 1000) {  // check duty cycle once per second 
+			if (extControlDisabledFlag) {
+				targetRpm = 0;
+			} else {
+			#if EXTERNAL_CONTROL_TYPE == 0 || EXTERNAL_CONTROL_TYPE == 1
+				if (extPwmPeriodNum < 1) // no pulse on input pin means either 0% or 100%
+					extPwmDutyCycle = digitalRead(pinExtControl);
+				DEBUG_PRINT(F("PWM frequency: "));		DEBUG_PRINT(extPwmPeriodNum);		DEBUG_PRINTLN(F(" Hz"));
+				DEBUG_PRINT(F("PWM duty cycle: "));		DEBUG_PRINT(extPwmDutyCycle * 100, 2);		DEBUG_PRINTLN(F("%"));
+				targetRpm = maxRpm * extPwmDutyCycle;
+				extPwmPeriodNum = 0;
+			#elif EXTERNAL_CONTROL_TYPE == 2
+				targetRpm = 1.0*maxRpm*analogRead(pinExtControl) / 255;
+			#elif EXTERNAL_CONTROL_TYPE == 3
+				targetRpm = 0;
+				currentRpmRate = rpmHaltRate;
+				for (int pin = 0; pin < rpmPresetNum; pin++) {
+					if (digitalRead(pinExtControl+pin) == HIGH) {
+						targetRpm = rpmPresetValue[pin];
+						currentRpmRate = rpmAccelerationRate;
+						break;
+					} // if (digitalRead(pin) == HIGH)
+				} // for(;;)
+			#endif
+			}		
 
-		if (targetRpm > maxRpm) targetRpm = maxRpm;
-		if (targetRpm < -maxRpm) targetRpm = -maxRpm;
-		if (abs(targetRpm) < minRpm) targetRpm = 0;
+			if (targetRpm > maxRpm) targetRpm = maxRpm;
+			if (targetRpm < -maxRpm) targetRpm = -maxRpm;
+			if (abs(targetRpm) < minRpm) targetRpm = 0;
 
-		lastRpmSetTime = now;
-	}
-
-#endif
+			lastRpmSetTime = now;
+		}
+#endif // #if ENABLE_EXTERNAL_CONTROL
 
 	// process encoder rotation
 	float delta = encoder->getValue();
@@ -683,7 +705,7 @@ void loop() {
 			} else {
 				currentRpmRate = rpmAccelerationRate;
 				stepCounter = 0;
-				halfStepLimit = (long)abs(2.0*targetVolume / ((targetVolume > 0) ? rpm2millilitreCw : rpm2millilitreCcw) * stepsPerRevolution);
+				halfStepLimit = (long)abs(2.0*targetVolume / ((targetVolume > 0) ? revolution2millilitreCw : revolution2millilitreCcw) * stepsPerRevolution);
 				TIMSK1 |= _BV(OCIE1B);  // enable timer compare interrupt
 				targetRpm = (targetVolume > 0) ? volumeRpm : -volumeRpm;
 			}
@@ -710,7 +732,7 @@ void loop() {
 		case MODE_RPM:
 			pumpMode++;
 			{
-				float factor = (currentRpm > 0) ? rpm2millilitreCw : rpm2millilitreCcw;
+				float factor = (currentRpm > 0) ? revolution2millilitreCw : revolution2millilitreCcw;
 				currentRpm = round(currentRpm * factor) / factor;
 			}
 			break;
@@ -790,7 +812,7 @@ void loop() {
 		break;
 	} // switch (encoder->getButton())
 
-	// display motor speed twice per second
+	// Update LCD twice per second
 	if (now > lastTime + ((halfStepLimit > 0) ? 100 : 500)) {
 		displayPumpData();
 		lastTime = now;
@@ -951,7 +973,7 @@ bool calibratePump() {
 		}
 
 		// ask user for measured volume
-		float volume = revolutionNum * rpm2millilitreCw;
+		float volume = revolutionNum * revolution2millilitreCw;
 		lcd.setCursor(0, 0);
 		lcd.print(F("Enter the volume"));
 		lcd.setCursor(0, 1);
@@ -972,7 +994,7 @@ bool calibratePump() {
 
 			ClickEncoder::Button  btn = encoder->getButton();
 			if (btn == ClickEncoder::Clicked) {
-				rpm2millilitreCw = volume / revolutionNum;
+				revolution2millilitreCw = volume / revolutionNum;
 				break;
 			}
 
@@ -1030,7 +1052,7 @@ bool calibratePump() {
 		}
 
 		// ask user for measured volume
-		float volume = revolutionNum * rpm2millilitreCcw;
+		float volume = revolutionNum * revolution2millilitreCcw;
 		lcd.setCursor(0, 0);
 		lcd.print(F("Enter the volume"));
 		lcd.setCursor(0, 1);
@@ -1052,7 +1074,7 @@ bool calibratePump() {
 			ClickEncoder::Button  btn = encoder->getButton();
 
 			if (btn == ClickEncoder::Clicked) {
-				rpm2millilitreCcw = volume / revolutionNum;
+				revolution2millilitreCcw = volume / revolutionNum;
 				break;
 			}
 
