@@ -3,7 +3,7 @@
 #include <ClickEncoder.h>
 #include <EEPROM.h>
 
-const double firmwareVersion = 2.0;
+const double firmwareVersion = 2.1;
 
 // Firmware features
 //==============================================================================================
@@ -18,20 +18,20 @@ const double firmwareVersion = 2.0;
 #define DISPLAY_LITRES_PER_HOUR 1
 
 // Pump stops when enters MODE_BOTTLING, if you do not this mode it you can switch it off
-#define ENABLE_MODE_BOTTLING 1
+#define ENABLE_MODE_BOTTLING 0
 
 // Starting from v2.0 pump saves total motor uptime & pumped volume to eeprom, disable it if not used
 #define ENABLE_UPTIME_CALC 1
 
 // Enable external speed control from moonshine controller, e.g. HelloDistiller
-#define ENABLE_EXTERNAL_CONTROL 0
+#define ENABLE_EXTERNAL_CONTROL 1
 
 // Choose control signal 
-//     0 = PWM signal from pin 2/interrupt 0, RPM = Duty*maxRpm.  Move encoder pins somewhere else.
-//     1 = PWM signal from pin 3/interrupt 1, RPM = Duty*maxRpm.  Move encoder pins somewhere else.
-//     2 = analog 0-5V input from pins A6/A7, RPM = InputVoltage*maxRpm/5V
-//     3 = set predefined RPM speed when corresponding pin is HIGH
-#define EXTERNAL_CONTROL_TYPE 3
+#define EXT_CTRL_VIA_PWM		1   // PWM signal from pin 2(3)/interrupt 0(1), RPM = Duty*maxRpm.  Move encoder pins somewhere else.
+#define EXT_CTRL_VIA_ANALOG		2   // analog 0-5V input from pins A6/A7, RPM = InputVoltage*maxRpm/5V
+#define EXT_CTRL_VIA_PIN_PRESET 3   // set predefined RPM speed when corresponding pin is HIGH
+
+#define EXTERNAL_CONTROL_TYPE   EXT_CTRL_VIA_PWM
 
 // We can use simple moisture sensor to detect hose failure
 #define ENABLE_MOISTURE_SENSOR 0
@@ -40,9 +40,9 @@ const double firmwareVersion = 2.0;
 // Note: A6 & A7 pins cannot do digitalRead() and should use analog input only, i.e. threshold>2
 #define MOISTURE_SENSOR_THRESHOLD 100 
 
-#define LCD_I2C_ADDRESS  0x27 // 0x3F 
+#define LCD_I2C_ADDRESS  0x3F // 0x27 // 0x3F 
 
-#define ENCODER_STEP_PER_NOTCH 4
+#define ENCODER_STEP_PER_NOTCH 2
 
 
 // Hardware Settings
@@ -60,17 +60,16 @@ const uint8_t pinReset = 12;
 const uint8_t pinSleep = 11;
 
 #if ENABLE_MOISTURE_SENSOR
-const uint8_t pinMoistureSensor = A6;
+	const uint8_t pinMoistureSensor = A6;
 #endif
 
 #if ENABLE_EXTERNAL_CONTROL 
-	#if EXTERNAL_CONTROL_TYPE==0
+	#if EXTERNAL_CONTROL_TYPE == EXT_CTRL_VIA_PWM
 		const uint8_t pinExtControl = 2;  // Interrupt 0
-	#elif EXTERNAL_CONTROL_TYPE==1
-		const uint8_t pinExtControl = 3;  // Interrupt 1
-	#elif EXTERNAL_CONTROL_TYPE==2
+		// const uint8_t pinExtControl = 3;  // Interrupt 1
+	#elif EXTERNAL_CONTROL_TYPE == EXT_CTRL_VIA_ANALOG
 		const uint8_t pinExtControl = A7;  // Analog input pin
-	#elif EXTERNAL_CONTROL_TYPE==3
+	#elif EXTERNAL_CONTROL_TYPE == EXT_CTRL_VIA_PIN_PRESET
 		const uint8_t pinExtControl = 5;  // Starting digital pin for RPM preset selection, i.e. 6-8 for rpmPresetNum=3 
 
 		// Presets are defined in RPM, i.e. revolutions per minute
@@ -83,18 +82,15 @@ const uint8_t pinMoistureSensor = A6;
 	#endif
 #endif // #if ENABLE_EXTERNAL_CONTROL
 
-#if ENABLE_EXTERNAL_CONTROL &&  EXTERNAL_CONTROL_TYPE==0
-	const uint8_t pinEncoderButton = 5;
+#if ENABLE_EXTERNAL_CONTROL &&  EXTERNAL_CONTROL_TYPE == EXT_CTRL_VIA_PWM
+	const uint8_t pinEncoderButton = 4;
+	const uint8_t pinEncoderA  = 5;
+	const uint8_t pinEncoderB  = 6;
 #else
 	const uint8_t pinEncoderButton = 2;
-#endif
-#if ENABLE_EXTERNAL_CONTROL &&  EXTERNAL_CONTROL_TYPE==1
-	const uint8_t pinEncoderA  = 5;
-#else
 	const uint8_t pinEncoderA  = 3;
+	const uint8_t pinEncoderB  = 4;
 #endif
-const uint8_t pinEncoderB  = 4;
-
 
 // Speed & motor setup
 const int8_t    microStepping = 8;
@@ -264,7 +260,7 @@ void setup() {
 #endif
 
 #if ENABLE_EXTERNAL_CONTROL
-	#if EXTERNAL_CONTROL_TYPE == 3
+	#if EXTERNAL_CONTROL_TYPE == EXT_CTRL_VIA_PIN_PRESET
 		for (int pin = 0; pin < rpmPresetNum; pin++) pinMode(pinExtControl+pin, INPUT);
 	#else
 		pinMode(pinExtControl, INPUT);
@@ -322,8 +318,9 @@ void setup() {
 
 	TIMSK2 |= _BV(OCIE2A); // enable timer compare interrupt
 
-#if ENABLE_EXTERNAL_CONTROL && (EXTERNAL_CONTROL_TYPE == 0 || EXTERNAL_CONTROL_TYPE == 1)
-	attachInterrupt(EXTERNAL_CONTROL_TYPE, ExternalInputISR, CHANGE);              // Attach interrupt handler
+#if ENABLE_EXTERNAL_CONTROL && EXTERNAL_CONTROL_TYPE == EXT_CTRL_VIA_PWM
+	// Attach interrupt handler
+	attachInterrupt(digitalPinToInterrupt(pinExtControl), ExternalInputISR, CHANGE);
 #endif
 
 	sei();  // allow interrupts	
@@ -393,7 +390,7 @@ ISR(TIMER2_COMPA_vect) {
 	encoder->service();
 	speedAdjustmentTicks++;
 }
-#if ENABLE_EXTERNAL_CONTROL && (EXTERNAL_CONTROL_TYPE ==0 || EXTERNAL_CONTROL_TYPE == 1)
+#if ENABLE_EXTERNAL_CONTROL && EXTERNAL_CONTROL_TYPE == EXT_CTRL_VIA_PWM
 void ExternalInputISR() {
 	static unsigned long lastFall;
 	static unsigned long lastRise;
@@ -404,7 +401,7 @@ void ExternalInputISR() {
 	float pwmOnTime;
 	float now = micros();
 
-	if (digitalRead(2 + EXTERNAL_CONTROL_TYPE) == LOW) {
+	if (digitalRead(pinExtControl) == LOW) {
 		// Falling edge
 		lastFall = now;
 		newPeriod = 1;
@@ -609,16 +606,16 @@ void loop() {
 			if (extControlDisabledFlag) {
 				targetRpm = 0;
 			} else {
-			#if EXTERNAL_CONTROL_TYPE == 0 || EXTERNAL_CONTROL_TYPE == 1
+			#if EXTERNAL_CONTROL_TYPE == EXT_CTRL_VIA_PWM
 				if (extPwmPeriodNum < 1) // no pulse on input pin means either 0% or 100%
 					extPwmDutyCycle = digitalRead(pinExtControl);
 				DEBUG_PRINT(F("PWM frequency: "));		DEBUG_PRINT(extPwmPeriodNum);		DEBUG_PRINTLN(F(" Hz"));
 				DEBUG_PRINT(F("PWM duty cycle: "));		DEBUG_PRINT(extPwmDutyCycle * 100, 2);		DEBUG_PRINTLN(F("%"));
 				targetRpm = maxRpm * extPwmDutyCycle;
 				extPwmPeriodNum = 0;
-			#elif EXTERNAL_CONTROL_TYPE == 2
+			#elif EXTERNAL_CONTROL_TYPE == EXT_CTRL_VIA_ANALOG
 				targetRpm = 1.0*maxRpm*analogRead(pinExtControl) / 255;
-			#elif EXTERNAL_CONTROL_TYPE == 3
+			#elif EXTERNAL_CONTROL_TYPE == EXT_CTRL_VIA_PIN_PRESET
 				targetRpm = 0;
 				currentRpmRate = rpmHaltRate;
 				for (int pin = 0; pin < rpmPresetNum; pin++) {
