@@ -3,7 +3,7 @@
 #include <ClickEncoder.h>
 #include <EEPROM.h>
 
-const double firmwareVersion = 2.1;
+const double firmwareVersion = 2.2;
 
 // Firmware features
 //==============================================================================================
@@ -12,7 +12,7 @@ const double firmwareVersion = 2.1;
 #define DEBUG_ENABLED 0
 
 // EEPROM magic byte, increment this to clear EEPROM settings
-#define MAGIC_BYTE 99
+#define MAGIC_BYTE 2
 
 // Show litres per hour instead of millilitres per minute
 #define DISPLAY_LITRES_PER_HOUR 1
@@ -34,15 +34,23 @@ const double firmwareVersion = 2.1;
 #define EXTERNAL_CONTROL_TYPE   EXT_CTRL_VIA_PWM
 
 // We can use simple moisture sensor to detect hose failure
-#define ENABLE_MOISTURE_SENSOR 0
+#define ENABLE_MOISTURE_SENSOR   1
+
+// Some sensors are inverted, i.e. has LOW output in wet environment and HIGH in  dry
+// So we can account it with with option
+#define MOISTURE_SENSOR_INVERTED 1
 
 // Threshold above which pump will halt. Set threshold to 2-255 for analog input, or to 1 for digital input
 // Note: A6 & A7 pins cannot do digitalRead() and should use analog input only, i.e. threshold>2
-#define MOISTURE_SENSOR_THRESHOLD 100 
+#define MOISTURE_SENSOR_THRESHOLD 300 
+
 
 #define LCD_I2C_ADDRESS  0x3F // 0x27 // 0x3F 
 
 #define ENCODER_STEP_PER_NOTCH 2
+
+// Pump will display a warning after this number of liters pumped withour hose replacement
+#define HOSE_WARNING_VOLUME 3000 
 
 
 // Hardware Settings
@@ -60,7 +68,7 @@ const uint8_t pinReset = 12;
 const uint8_t pinSleep = 11;
 
 #if ENABLE_MOISTURE_SENSOR
-	const uint8_t pinMoistureSensor = A6;
+	const uint8_t pinMoistureSensor = A7;
 #endif
 
 #if ENABLE_EXTERNAL_CONTROL 
@@ -83,9 +91,9 @@ const uint8_t pinSleep = 11;
 #endif // #if ENABLE_EXTERNAL_CONTROL
 
 #if ENABLE_EXTERNAL_CONTROL &&  EXTERNAL_CONTROL_TYPE == EXT_CTRL_VIA_PWM
-	const uint8_t pinEncoderButton = 4;
-	const uint8_t pinEncoderA  = 5;
-	const uint8_t pinEncoderB  = 6;
+	const uint8_t pinEncoderButton = 5;
+	const uint8_t pinEncoderA  = 6;
+	const uint8_t pinEncoderB  = 7;
 #else
 	const uint8_t pinEncoderButton = 2;
 	const uint8_t pinEncoderA  = 3;
@@ -138,7 +146,8 @@ volatile long stepCounter = 0;
 volatile long halfStepLimit = 0;
 
 // variable for uptime counting
-uint32_t totalMotorUptime = 0;		// motor uptime in seconds
+uint32_t totalMotorUptime = 0;		// total motor uptime in seconds
+double   totalHoseVolume = 0;		// total hose uptime in seconds, user may reset that by holding encoder button while powering on
 double   totalPumpedVolume = 0;	    // total pumped volume in litres
 float    lastCurrentRpm = 0;
 
@@ -159,26 +168,26 @@ uint32_t eepromRewriteCounter = 0;  // ATMEL gives 100000 cell rewrites lifetime
 
 #if ENABLE_EXTERNAL_CONTROL
 	// User may want to halt the motor manually. We will use this flag to ignore external input.
-bool extControlDisabledFlag = true;
-uint32_t lastRpmSetTime = 0;
-volatile float extPwmDutyCycle = 0;
-volatile uint16_t extPwmPeriodNum = 0;
-const double extCtrlAvgWeight = 0.01;
+	bool extControlDisabledFlag = true;
+	uint32_t lastRpmSetTime = 0;
+	volatile float extPwmDutyCycle = 0;
+	volatile uint16_t extPwmPeriodNum = 0;
+	const double extCtrlAvgWeight = 0.01;
 #endif
 
 // Debug helpers
 #if DEBUG_ENABLED
-#define DEBUG_BEGIN(baudRate)	Serial.begin(baudRate)
-									// Prints debug message
-#define DEBUG_PRINT(...)		Serial.print(__VA_ARGS__)
-#define DEBUG_PRINTLN(...)		Serial.println(__VA_ARGS__)
-									// Debug block may contain any code that we'll be switched off when debugging disabled
-#define DEBUG_BLOCK(block)		do { block; } while(0)	
+	#define DEBUG_BEGIN(baudRate)	Serial.begin(baudRate)
+										// Prints debug message
+	#define DEBUG_PRINT(...)		Serial.print(__VA_ARGS__)
+	#define DEBUG_PRINTLN(...)		Serial.println(__VA_ARGS__)
+										// Debug block may contain any code that we'll be switched off when debugging disabled
+	#define DEBUG_BLOCK(block)		do { block; } while(0)	
 #else
-#define DEBUG_BEGIN(...)
-#define DEBUG_PRINT(...)   
-#define DEBUG_PRINTLN(...) 
-#define DEBUG_BLOCK(block)
+	#define DEBUG_BEGIN(...)
+	#define DEBUG_PRINT(...)   
+	#define DEBUG_PRINTLN(...) 
+	#define DEBUG_BLOCK(block)
 #endif
 
 // EEPROM handling
@@ -202,6 +211,7 @@ void eepromWriteTotals() {
 	EEPROM.put(20, totalMotorUptime);
 	EEPROM.put(25, totalPumpedVolume);
 	EEPROM.put(30, eepromRewriteCounter);
+	EEPROM.put(35, totalHoseVolume);
 }
 #endif  // !ENABLE_UPTIME_CALC
 
@@ -221,6 +231,7 @@ bool eepromRead() {
 	EEPROM.get(20, totalMotorUptime);
 	EEPROM.get(25, totalPumpedVolume);
 	EEPROM.get(30, eepromRewriteCounter);
+	EEPROM.get(35, totalHoseVolume);
 #endif
 	return true;
 }
@@ -327,6 +338,42 @@ void setup() {
 
 #if ENABLE_UPTIME_CALC
 	delay(1000);
+			
+	// Reset hose uptime
+	if(digitalRead(pinEncoderButton) == LOW) {
+		bool resetHoseUptime = 1;
+		lcd.clear();
+		lcd.print(F("Clear hose vol.?"));
+		lcd.setCursor(0, 1);
+		lcd.print(F("Yes             "));
+
+		// Wait button release
+		while (digitalRead(pinEncoderButton) == LOW)
+			delay(10); // do nothing
+
+		// debounce
+		delay(200);
+
+		do {
+			if (encoder->getValue()) {
+				resetHoseUptime = !resetHoseUptime;
+				lcd.setCursor(0, 1);
+				if(resetHoseUptime)
+					lcd.print(F("Yes             "));
+				else
+					lcd.print(F("No              "));
+			}
+
+			if (digitalRead(pinEncoderButton) == LOW) {
+				if (resetHoseUptime) totalHoseVolume = 0;
+				eepromWriteTotals();
+				break;
+			}
+			delay(10);
+		} while (1);
+	}
+
+	
 	// Display total stepper uptime
 	lcd.clear();
 	lcd.print(F("Motor uptime:   "));
@@ -342,6 +389,17 @@ void setup() {
 	DEBUG_PRINTLN(line);
 	delay(1000);
 
+	// Display hose volume pumped
+	lcd.clear();
+	lcd.print(F("Hose volume:    "));
+	lcd.setCursor(0, 1);
+	line = String(totalHoseVolume, 2) + String(F("L"));
+	lcd.print(line);
+	DEBUG_PRINT(F("Hose volume pumped: "));
+	DEBUG_PRINT(totalHoseVolume, 3);
+	DEBUG_PRINTLN(F("L"));
+	delay(1000);
+
 	// Display total volume pumped
 	lcd.clear();
 	lcd.print(F("Total volume:   "));
@@ -355,6 +413,22 @@ void setup() {
 #else
 	delay(2000);
 #endif  // ENABLE_UPTIME_CALC
+
+
+	// Remove all clicks from encoder before moving to loop
+	while (encoder->getButton())
+		delay(200); // do nothing
+
+	if(totalHoseVolume>HOSE_WARNING_VOLUME) {
+		lcd.clear();
+		lcd.print(F("    WARNING!    "));
+		lcd.setCursor(0, 1);
+		lcd.print(F("Replace the hose"));
+		delay(1000);
+
+		while (encoder->getButton() != ClickEncoder::Button_e::Clicked) 
+			delay(200); // do nothing
+	}
 }
 
 
@@ -537,7 +611,15 @@ void loop() {
 	if (!haltOnHoseFailureFlag && now - lastSensorReadTime > 777) {
 		// Read the input on moisture sensor pin
 		int sensorValue = (MOISTURE_SENSOR_THRESHOLD > 1) ? analogRead(pinMoistureSensor) : digitalRead(pinMoistureSensor);
-		if (sensorValue >= MOISTURE_SENSOR_THRESHOLD) {
+
+		DEBUG_PRINT(F("Moisture sensor value is "));
+		DEBUG_PRINTLN(sensorValue);
+
+		#if MOISTURE_SENSOR_INVERTED
+			if (sensorValue < MOISTURE_SENSOR_THRESHOLD) {
+		#else
+			if (sensorValue >= MOISTURE_SENSOR_THRESHOLD) {
+		#endif
 			lcd.clear();
 			lcd.print("  Hose failure  ");
 			lcd.setCursor(0, 1);
@@ -553,6 +635,9 @@ void loop() {
 		currentRpmRate = rpmHaltRate;
 		targetRpm = 0;
 		adjustMotorSpeed();
+
+		if (encoder->getButton() == ClickEncoder::Button_e::Clicked)
+			haltOnHoseFailureFlag = false;
 		return;
 	}
 #endif
@@ -565,9 +650,14 @@ void loop() {
 
 	// Count pumped volume
 	if (now - lastIntegralTime > volumeIntegralPeriodMs) {
-		if (abs(currentRpm) > 0) totalMotorUptime += volumeIntegralPeriodMs / 1000;
+		if (abs(currentRpm) > 0)
+			totalMotorUptime += volumeIntegralPeriodMs / 1000;
+		
 		const double rpmIntegral = 0.5*(currentRpm + ((currentRpm*lastCurrentRpm > 0) ? 1 : -1)*lastCurrentRpm) / 60 * volumeIntegralPeriodMs / 1000;
-		totalPumpedVolume += rpm2ml * abs(rpmIntegral) / 1000;
+		const double pumpedVolumeL = rpm2ml * abs(rpmIntegral) / 1000;
+
+		totalPumpedVolume += pumpedVolumeL;
+		totalHoseVolume += pumpedVolumeL;
 
 		DEBUG_BLOCK({
 			if (abs(rpmIntegral) > 0) {
