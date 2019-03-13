@@ -9,9 +9,9 @@
 include <settings.scad>
 use <lcd1602.scad>
 
-assembly      = 0;   // render assembly
+assembly      = 1;   // render assembly
 render_top    = 1;   // render top part
-render_bottom = 0;   // render bottom part
+render_bottom = 1;   // render bottom part
 render_side_panel = 1;   // render bottom part
 
 rubber_legs = true;
@@ -114,6 +114,17 @@ if(assembly) {
         rotate([back_angle, 0, 0])  
         translate([0,handle_length, 0]) 
         import("head-assembly.stl");
+    
+    color("orange", alpha) 
+    // front panel with lcd & encoder
+        translate( [  0,
+                     -w_front_panel/2*cos(front_angle)+wall_case,
+                      h_case-0.5*w_front_panel*sin(front_angle)
+                   ])
+        rotate([-front_angle,0,0])
+        translate([x_enc_shift-1.8, y_enc_shift-3, z_enc_shift+10])
+        rotate([0,0,+90]) 
+        import("deps/encoder-knob.stl");
     
     if(render_top)       case_main();
     if(render_bottom)    { 
