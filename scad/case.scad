@@ -9,8 +9,9 @@
 include <settings.scad>
 use <lcd1602.scad>
 
-assembly      = 1;   // render assembly
-render_top    = 1;   // render top part
+
+assembly      = 0;   // render assembly
+render_top    = 0;   // render top part
 render_bottom = 1;   // render bottom part
 render_side_panel = 1;   // render bottom part
 
@@ -63,7 +64,7 @@ w_pcb = 49;
 x_pcb_hole = 51.4;
 y_pcb_hole = 41.91;
 d_pcb_hole = 2;
-x_shift_pcb = 0;
+x_shift_pcb = -10;
 y_shift_pcb = -29.5;
 z_shift_pcb = 8;
 d_pcb_leg = 7;
@@ -196,6 +197,7 @@ module bottom_cover() {
             translate([-x_pcb_hole, -y_pcb_hole, 0]/2)  pbc_leg();
         } // pcb holder
         
+        translate([x_shift_pcb+l_pcb/2+15, y_shift_pcb-5, 0]) pbc_leg();
     } else {
         translate([0,-l_case/2 + 0.5*wall_case + cover_clearance, -h_bottom_legs]) {
             translate(legs_shift*[1,1,0])    
@@ -215,6 +217,7 @@ module bottom_cover() {
             cylinder(d=d_pcb_leg_hole, h=z_shift_pcb);
         }
     }
+    
     module holder_hole(size, d){
         translate([size/2, -size/2, 0])
                 cylinder(d=d,h=20);
@@ -270,20 +273,6 @@ module draw_rubber_legs(){
 
 // Case main/top part
 //==============================================================================
-//font_thickness = 1;
-//minkowski(){
-//translate([0,wall_case,0.6*(h_case-w_front_panel*sin(front_angle))])
-//    rotate([90,0,180]) 
-//    linear_extrude(font_thickness) 
-//    text("Pump v3", size = 15, halign="center", valign="center");
-//sphere(d=1);
-//}
-//
-//translate([0,wall_case,0.25*(h_case-w_front_panel*sin(front_angle))])
-//    rotate([90,0,180]) 
-//    linear_extrude(font_thickness) 
-//    text("(c) 2018 Phisik", size = 5, halign="center", valign="center");
-
 module case_main() {
 
     // front panel with lcd & encoder
@@ -392,12 +381,30 @@ module case_main() {
                    wall_case], center=false);
 
     // head panel
+    
+
+    
     translate([0,-l_case,h_case]) 
-    difference(){
+    difference(){ union(){
         translate([-w_case/2,0,-w_back_panel*sin(back_angle)])
             rotate([back_angle, 0, 0])
             translate([0,0,-wall_case])
             cube([ w_case, w_back_panel, wall_case], center=false);
+        
+        translate([-w_case/2,0,-w_back_panel*sin(back_angle)])
+            rotate([back_angle, 0, 0]) {
+            multmatrix([ [1, 0, 0, 0],
+                         [0, 1, -sin(back_angle-front_angle), 5],
+                         [0, 0, 1, -8-wall_case],
+                         [0, 0, 0, 1] ])
+                 cube([ 15, w_back_panel, 8], center=false);
+                multmatrix([ [1, 0, 0, w_case-15],
+                         [0, 1, -sin(back_angle-front_angle), 5],
+                         [0, 0, 1, -8-wall_case],
+                         [0, 0, 0, 1] ])
+                 cube([ 15, w_back_panel, 8], center=false);
+            }
+    }
         
         translate([0,-0, -w_back_panel*sin(back_angle)]) 
             rotate([back_angle, 0, 0])  
