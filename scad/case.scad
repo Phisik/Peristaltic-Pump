@@ -11,9 +11,11 @@ use <lcd1602.scad>
 
 
 assembly      = 0;   // render assembly
-render_top    = 0;   // render top part
-render_bottom = 1;   // render bottom part
+render_top    = 1;   // render top part
+render_bottom = 0;   // render bottom part
 render_side_panel = 1;   // render bottom part
+
+need_motor_plane_support = 1;
 
 rubber_legs = true;
 d1_rubber_legs = 15;
@@ -390,20 +392,21 @@ module case_main() {
             rotate([back_angle, 0, 0])
             translate([0,0,-wall_case])
             cube([ w_case, w_back_panel, wall_case], center=false);
-        
+     if(need_motor_plane_support) {   
         translate([-w_case/2,0,-w_back_panel*sin(back_angle)])
             rotate([back_angle, 0, 0]) {
             multmatrix([ [1, 0, 0, 0],
-                         [0, 1, -sin(back_angle-front_angle), 5],
-                         [0, 0, 1, -8-wall_case],
+                         [0, 1, -sin(back_angle-front_angle), 2.5],
+                         [0, 0, 1, -5-wall_case],
                          [0, 0, 0, 1] ])
-                 cube([ 15, w_back_panel, 8], center=false);
+                 cube([ 15, w_back_panel, 5], center=false);
                 multmatrix([ [1, 0, 0, w_case-15],
-                         [0, 1, -sin(back_angle-front_angle), 5],
-                         [0, 0, 1, -8-wall_case],
+                         [0, 1, -sin(back_angle-front_angle), 2.5],
+                         [0, 0, 1, -5-wall_case],
                          [0, 0, 0, 1] ])
-                 cube([ 15, w_back_panel, 8], center=false);
+                 cube([ 15, w_back_panel, 5], center=false);
             }
+        }
     }
         
         translate([0,-0, -w_back_panel*sin(back_angle)]) 
