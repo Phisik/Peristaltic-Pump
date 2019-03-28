@@ -11,11 +11,11 @@ include <settings.scad>
 
 // Assembly
 //===============================================================
-assemble = 1;
+assemble = 0;
 halfcut = 0;
 moved_apart = 1;
 
-
+gap = 1;
 
 partNum = 3; // 1 - stator
              // 2 - stator support
@@ -23,6 +23,12 @@ partNum = 3; // 1 - stator
              // 4 - rotor base
              // 5 - rotor cover
 
+
+// To print without skirt we will add some extra material only around the corners
+enable_angle_support = 1;
+angle_support_gap = .1;
+angle_support_w = 15;
+angle_support_h = 0.75;
              
 // Part smoothness, the more the better
 $fn = 100;
@@ -57,13 +63,65 @@ if(assemble) {
     rotor(0);
     
 } else {
-   if(partNum==1) stator_base();
-   if(partNum==2) stator_support();
-   if(partNum==3) //rotate([0,180,0]) 
-       stator_cover();
+   if(partNum==1) {
+       stator_base();
+       if(enable_angle_support) {
+           angle_support(angle_support_w, angle_support_h, 
+                         -r_ext-mount_length, -handle_length, angle_support_gap, 1);
+           angle_support(angle_support_w, angle_support_h, 
+                         -r_ext-mount_length, r_ext, angle_support_gap, 2);
+           angle_support(angle_support_w, angle_support_h, 
+                         r_ext+mount_length, -handle_length, angle_support_gap, 3);
+           angle_support(angle_support_w, angle_support_h, 
+                         r_ext+mount_length, r_ext, angle_support_gap, 4);
+       }
+   }
+   if(partNum==2) { 
+       stator_support();
+        if(enable_angle_support) {
+           
+           angle_support(angle_support_w, angle_support_h, 
+                         -r_ext-mount_length, -y_hole_distance+stator_support_gap, angle_support_gap, 1);
+           angle_support(angle_support_w, angle_support_h, 
+                         -r_ext-mount_length, r_ext-stator_facet, angle_support_gap, 2);
+           angle_support(angle_support_w, angle_support_h, 
+                         r_ext+mount_length, -y_hole_distance+stator_support_gap, angle_support_gap, 3);
+           angle_support(angle_support_w, angle_support_h, 
+                         r_ext+mount_length, r_ext-stator_facet, angle_support_gap, 4);
+       }
+   }
+   if(partNum==3) {
+       rotate([0,180,0]) translate([0, handle_length, -h_stator]) stator_cover();
+       if(enable_angle_support) {
+           
+           angle_support(angle_support_w*0.75, angle_support_h, 
+                         -r_ext+gap-0.05, 0, angle_support_gap, 1);
+           angle_support(angle_support_w*0.75, angle_support_h, 
+                         -r_ext+gap-0.05, handle_length-y_hole_distance, angle_support_gap, 2);
+           angle_support(angle_support_w*0.75, angle_support_h, 
+                         r_ext-gap+0.05, 0, angle_support_gap, 3);
+           angle_support(angle_support_w*0.75, angle_support_h, 
+                         r_ext-gap+0.05, handle_length-y_hole_distance, angle_support_gap, 4);
+       }
+   }
    if(partNum==4) rotor(1);
    if(partNum==5) rotate([0,180,0]) 
        rotor(2);
+}
+
+
+// width, height, center x0/y0, gap & quadrant number to cut out
+module angle_support(w, h, x0=0, y0=0, gap=0, q=1) {
+    translate([x0, y0, h/2]) 
+    difference() {
+        cube([w, w, h], center=true);
+        
+        i = (q==3 || q==4)?-1:1;
+        j = (q==2 || q==4)?-1:1;
+        
+        translate([i*w/2, j*w/2, 0]) 
+            cube([w+2*gap, w+2*gap, h+1], center=true);
+    }
 }
 
 // Functions
@@ -328,7 +386,7 @@ module stator_support() {
             cube([mount_length, mount_width, h_stator-h_base]);
         translate([r_ext+mount_length/2, -100, 0.5*(h_stator-h_base)-gap/2])
             rotate([-90,0,0]) 
-            cylinder(d=d_screw, h = 100, $fn=6);
+            cylinder(d=d_screw*1.33, h = 100, $fn=6);
         if(need_nut_cuts_in_support)
             translate([r_ext+mount_length/2, -y_hole_distance+stator_support_gap+mount_width-2, 0.5*(h_stator-h_base)-gap/2])
             rotate([-90,0,0]) 
@@ -339,7 +397,7 @@ module stator_support() {
             cube([mount_length, mount_width, h_stator-h_base]);
         translate([-r_ext-mount_length/2, -100, 0.5*(h_stator-h_base)-gap/2])
             rotate([-90,0,0]) 
-            cylinder(d=d_screw, h = 100, $fn=6);
+            cylinder(d=d_screw*1.33, h = 100, $fn=6);
         if(need_nut_cuts_in_support)
             translate([-r_ext-mount_length/2, -y_hole_distance+stator_support_gap+mount_width-2, 0.5*(h_stator-h_base)-gap/2])
             rotate([-90,0,0]) 
