@@ -34,7 +34,7 @@ const double firmwareVersion = 2.2;
 #define EXTERNAL_CONTROL_TYPE   EXT_CTRL_VIA_PWM
 
 // We can use simple moisture sensor to detect hose failure
-#define ENABLE_MOISTURE_SENSOR   1
+#define ENABLE_MOISTURE_SENSOR   0
 
 // Some sensors are inverted, i.e. has LOW output in wet environment and HIGH in  dry
 // So we can account it with with option
