@@ -171,8 +171,9 @@ uint32_t eepromRewriteCounter = 0;  // ATMEL gives 100000 cell rewrites lifetime
 	bool extControlDisabledFlag = true;
 	uint32_t lastRpmSetTime = 0;
 	volatile float extPwmDutyCycle = 0;
-	volatile uint16_t extPwmPeriodNum = 0;
-	const double extCtrlAvgWeight = 0.01;
+	volatile uint16_t extPwmPeriodNum = 0;    // PWM period counter to detect pulse presence
+	const uint8_t  extCtrlAvgNum = 2;         // Number of PWM periods to average duty cycle, helps to prevent jitter
+	const uint16_t extCtrlCheckPeriod = 3000; // Time interval to check for motor speed
 #endif
 
 // Debug helpers
@@ -484,6 +485,7 @@ void ExternalInputISR() {
 		pwmPeriod = now - lastRise;
 		pwmOnTime = lastFall - lastRise;
 		const double duty = pwmOnTime / pwmPeriod;
+		const double extCtrlAvgWeight = 1.0 / extCtrlAvgNum;
 
 		if (duty >= 0 && duty <= 1) extPwmDutyCycle = (extPwmDutyCycle + extCtrlAvgWeight * duty) / (1 + extCtrlAvgWeight);
 
@@ -692,12 +694,12 @@ void loop() {
 #endif  // ENABLE_UPTIME_CALC
 
 #if ENABLE_EXTERNAL_CONTROL
-		if (pumpMode == MODE_EXT_CONTROL && now - lastRpmSetTime > 1000) {  // check duty cycle once per second 
+		if (pumpMode == MODE_EXT_CONTROL && now - lastRpmSetTime > extCtrlCheckPeriod) {  // check duty cycle once per extCtrlCheckPeriod 
 			if (extControlDisabledFlag) {
 				targetRpm = 0;
 			} else {
 			#if EXTERNAL_CONTROL_TYPE == EXT_CTRL_VIA_PWM
-				if (extPwmPeriodNum < 1) // no pulse on input pin means either 0% or 100%
+				if (extPwmPeriodNum < 1)  // no pulse on input pin means either 0% or 100%
 					extPwmDutyCycle = digitalRead(pinExtControl);
 				DEBUG_PRINT(F("PWM frequency: "));		DEBUG_PRINT(extPwmPeriodNum);		DEBUG_PRINTLN(F(" Hz"));
 				DEBUG_PRINT(F("PWM duty cycle: "));		DEBUG_PRINT(extPwmDutyCycle * 100, 2);		DEBUG_PRINTLN(F("%"));
