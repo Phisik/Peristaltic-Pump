@@ -3,7 +3,7 @@
 #include <ClickEncoder.h>
 #include <EEPROM.h>
 
-const double firmwareVersion = 2.2;
+const double firmwareVersion = 2.3;
 
 // Firmware features
 //==============================================================================================
@@ -50,7 +50,7 @@ const double firmwareVersion = 2.2;
 #define ENCODER_STEP_PER_NOTCH 2
 
 // Pump will display a warning after this number of liters pumped withour hose replacement
-#define HOSE_WARNING_VOLUME 3000 
+#define HOSE_WARNING_VOLUME 3000L 
 
 
 // Hardware Settings
