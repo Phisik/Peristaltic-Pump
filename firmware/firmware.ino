@@ -174,6 +174,15 @@ uint32_t eepromRewriteCounter = 0;  // ATMEL gives 100000 cell rewrites lifetime
 	volatile uint16_t extPwmPeriodNum = 0;    // PWM period counter to detect pulse presence
 	const uint8_t  extCtrlAvgNum = 2;         // Number of PWM periods to average duty cycle, helps to prevent jitter
 	const uint16_t extCtrlCheckPeriod = 3000; // Time interval to check for motor speed
+	
+	const float extCtrlPwmFactor = 0.45;      // Correction factor for external PWM duty cycle
+
+											  // Note for HelloDistiller controller user:
+	                                          // ¬ HelloDistiller слишком грубый шаг - 1/125. ј скорость насоса максимальна€ больша€ ~65л/ч
+											  // ¬ результате 1 шаг дает слишком большой прирост потока. „тобы уменьшить шаг регулировки
+											  // мы будет уменьшать внешний PWM duty cycle. ћаксимальна€ скорость при этома пролучитьс€
+											  // extCtrlPwmFactor*maxRpm
+							
 #endif
 
 // Debug helpers
@@ -484,7 +493,7 @@ void ExternalInputISR() {
 		// Rising edge
 		pwmPeriod = now - lastRise;
 		pwmOnTime = lastFall - lastRise;
-		const double duty = pwmOnTime / pwmPeriod;
+		const double duty = extCtrlPwmFactor*pwmOnTime / pwmPeriod;
 		const double extCtrlAvgWeight = 1.0 / extCtrlAvgNum;
 
 		if (duty >= 0 && duty <= 1) extPwmDutyCycle = (extPwmDutyCycle + extCtrlAvgWeight * duty) / (1 + extCtrlAvgWeight);
