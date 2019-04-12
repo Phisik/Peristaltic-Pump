@@ -729,8 +729,8 @@ void loop() {
 		lastTotalMotorUptime = totalMotorUptime;
 		lastEepromSaveTime = now;
 		// Increase eeprom save period to extend cell life
-		if (++eepromWriteCounter > 10)		eepromSaveTotalsPeriodMs = 5 * 60 * 1000; // 5 minutes
-		else if (eepromWriteCounter > 20)	eepromSaveTotalsPeriodMs = 10 * 60 * 1000; // 10 minutes
+		if (++eepromWriteCounter > 10)		eepromSaveTotalsPeriodMs = 5 * 60 * 1000L; // 5 minutes
+		else if (eepromWriteCounter > 20)	eepromSaveTotalsPeriodMs = 10 * 60 * 1000L; // 10 minutes
 	}
 #endif  // ENABLE_UPTIME_CALC
 
