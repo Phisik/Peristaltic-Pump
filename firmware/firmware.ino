@@ -3,7 +3,7 @@
 #include <ClickEncoder.h>
 #include <EEPROM.h>
 
-const double firmwareVersion = 2.3;
+const double firmwareVersion = 2.4;
 
 // Firmware features
 //==============================================================================================
@@ -12,19 +12,19 @@ const double firmwareVersion = 2.3;
 #define DEBUG_ENABLED 0
 
 // EEPROM magic byte, increment this to clear EEPROM settings
-#define MAGIC_BYTE 2
+#define MAGIC_BYTE 19041202L
 
 // Show litres per hour instead of millilitres per minute
 #define DISPLAY_LITRES_PER_HOUR 1
 
 // Pump stops when enters MODE_BOTTLING, if you do not this mode it you can switch it off
-#define ENABLE_MODE_BOTTLING 0
+#define ENABLE_MODE_BOTTLING 1
 
 // Starting from v2.0 pump saves total motor uptime & pumped volume to eeprom, disable it if not used
 #define ENABLE_UPTIME_CALC 1
 
 // Enable external speed control from moonshine controller, e.g. HelloDistiller
-#define ENABLE_EXTERNAL_CONTROL 1
+#define ENABLE_EXTERNAL_CONTROL 0
 
 // Choose control signal 
 #define EXT_CTRL_VIA_PWM		1   // PWM signal from pin 2(3)/interrupt 0(1), RPM = Duty*maxRpm.  Move encoder pins somewhere else.
@@ -102,11 +102,18 @@ const uint8_t pinSleep = 11;
 
 // Speed & motor setup
 const int8_t    microStepping = 8;
-const int16_t   maxRpm = 450;			// Upper limit, don't increase RMP above this
-const float     minRpm = 0.01;			// Lower limit, set RPM=0
+const int16_t   maxRpm = 450;			// Upper limit, won't increase RMP above this
+const float     minRpm = 0.01;			// Lower limit, if RPM<minRpm, RPM will be set to 0
 const int16_t   rpmAccelerationRate = 50;	// RPM increase per second when user change speed
 const int16_t   rpmHaltRate = 200;		// RPM increase per second when motor halts
-const int16_t   volumeRpm = 200;		// RPM when need to pump some water volume
+const int16_t   calibrationRpm = 200;		// RPM for calibration
+
+#if ENABLE_MODE_BOTTLING
+int16_t		  bottlingRpm = 200;			// RPM for bottling
+int16_t		  bottlingIncrementFactor = 1;	// When we need to pump large volume of liquid it will take too long 
+											// to rotate the encoder to set the value. This factor allows to increase
+											// the increment delta in bottling mode
+#endif
 
 const float   degreePerStep = 1.8;  // rather common value for widespread motors
 const int16_t stepsPerRevolution = 360 / degreePerStep * microStepping;
@@ -119,16 +126,15 @@ const float   slowdownFactor = 0.2;
 
 #define MODE_RPM			 0		// Control RPM
 #define MODE_LITRES_PER_HOUR 1      // Control liquid volume per second
-
-#if ENABLE_MODE_BOTTLING 
 #define MODE_BOTTLING	 2      // Pump fixed volume of liquid
-#endif
-#if ENABLE_EXTERNAL_CONTROL
 #define MODE_EXT_CONTROL 3	    // External control via PWM or analog signal
-#endif
 
 int8_t  pumpMode = 0;
-LiquidCrystal_I2C lcd(LCD_I2C_ADDRESS, 16, 2);
+
+#define LCD_WIDTH 16
+#define LCD_HEIGHT 2
+
+LiquidCrystal_I2C lcd(LCD_I2C_ADDRESS, LCD_WIDTH, LCD_HEIGHT);
 
 int16_t  targetVolume = 500;
 float    targetRpm = 0;
@@ -202,46 +208,67 @@ uint32_t eepromRewriteCounter = 0;  // ATMEL gives 100000 cell rewrites lifetime
 
 // EEPROM handling
 //================================================================================================
+template <typename T> int eepromGet(int addr, const T &t);
+template <typename T> int eepromPut(int addr, const T &t);
+
+// EEPROM helper function that return number of bytes writed/read
+template <typename T> int eepromGet(int addr, const T &t ){
+	EEPROM.get(addr, t);
+	return(sizeof(t));
+}
+template <typename T> int eepromPut(int addr, const T &t ){
+	EEPROM.put(addr, t);
+	return(sizeof(t));
+}
+
 void eepromWrite() {
+	uint32_t magic = MAGIC_BYTE; 
+	int address = 0;
 	eepromRewriteCounter++;
 
-	EEPROM.write(0, (uint8_t)MAGIC_BYTE);
-	EEPROM.write(1, (uint8_t)pumpMode);
-	EEPROM.put(2, revolution2millilitreCw);
-	EEPROM.put(6, revolution2millilitreCcw);
-	EEPROM.put(10, lastTargetRpm);
-	EEPROM.put(15, targetVolume);
-#if ENABLE_UPTIME_CALC
-	eepromWriteTotals();
+	address += eepromPut(address, magic);
+	address += eepromPut(address, pumpMode);
+	address += eepromPut(address, revolution2millilitreCw);
+	address += eepromPut(address, revolution2millilitreCcw);
+	address += eepromPut(address, lastTargetRpm);
+	address += eepromPut(address, targetVolume);
+#if ENABLE_MODE_BOTTLING
+	address += eepromPut(address, bottlingIncrementFactor);
+	address += eepromPut(address, bottlingRpm);
 #endif
+#if ENABLE_UPTIME_CALC
+	address += eepromPut(address, totalMotorUptime);
+	address += eepromPut(address, totalPumpedVolume);
+	address += eepromPut(address, eepromRewriteCounter);
+	address += eepromPut(address, totalHoseVolume);
+#endif  // !ENABLE_UPTIME_CALC
 }
 
-#if ENABLE_UPTIME_CALC
-void eepromWriteTotals() {
-	EEPROM.put(20, totalMotorUptime);
-	EEPROM.put(25, totalPumpedVolume);
-	EEPROM.put(30, eepromRewriteCounter);
-	EEPROM.put(35, totalHoseVolume);
-}
-#endif  // !ENABLE_UPTIME_CALC
 
 bool eepromRead() {
-	const uint8_t magic = EEPROM.read(0);
+	uint32_t magic; 
+	int address = 0;
+
+	address += eepromGet(address, magic);
 	if (magic != MAGIC_BYTE) {
 		eepromWrite(); // clear old data
 		return false;
 	}
 
-	pumpMode = (uint8_t)EEPROM.read(1);
-	EEPROM.get(2, revolution2millilitreCw);
-	EEPROM.get(6, revolution2millilitreCcw);
-	EEPROM.get(10, lastTargetRpm);
-	EEPROM.get(15, targetVolume);
+	address += eepromGet(address, pumpMode);
+	address += eepromGet(address, revolution2millilitreCw);
+	address += eepromGet(address, revolution2millilitreCcw);
+	address += eepromGet(address, lastTargetRpm);
+	address += eepromGet(address, targetVolume);
+#if ENABLE_MODE_BOTTLING
+	address += eepromGet(address, bottlingIncrementFactor);
+	address += eepromGet(address, bottlingRpm);
+#endif
 #if ENABLE_UPTIME_CALC
-	EEPROM.get(20, totalMotorUptime);
-	EEPROM.get(25, totalPumpedVolume);
-	EEPROM.get(30, eepromRewriteCounter);
-	EEPROM.get(35, totalHoseVolume);
+	address += eepromGet(address, totalMotorUptime);
+	address += eepromGet(address, totalPumpedVolume);
+	address += eepromGet(address, eepromRewriteCounter);
+	address += eepromGet(address, totalHoseVolume);
 #endif
 	return true;
 }
@@ -376,7 +403,7 @@ void setup() {
 
 			if (digitalRead(pinEncoderButton) == LOW) {
 				if (resetHoseUptime) totalHoseVolume = 0;
-				eepromWriteTotals();
+				eepromWrite();
 				break;
 			}
 			delay(10);
@@ -448,13 +475,18 @@ long slowdownLimit = 0;
 ISR(TIMER1_COMPB_vect) {
 	stepCounter++;
 
-	// Slowdown motor when at the and of specific water volume pumping
+	// Slowdown motor when at the and of bottling or calibration
 	// We do all calculations here, since it does not affect overall performance in our case
 	if (slowdownLimit < stepCounter)
 		if (slowdownLimit == 0) {
 			slowdownLimit = halfStepLimit - 1L * slowdownRevolutions * stepsPerRevolution;
 		} else {
-			targetRpm = slowdownFactor * ((targetRpm > 0) ? volumeRpm : -volumeRpm);
+		#if ENABLE_MODE_BOTTLING
+			const uint16_t rpm = (pumpMode == MODE_BOTTLING) ? bottlingRpm : calibrationRpm;
+			targetRpm = slowdownFactor * ((targetRpm > 0) ? rpm : -rpm);
+		#else
+			targetRpm = slowdownFactor * ((targetRpm > 0) ? calibrationRpm : -calibrationRpm);
+		#endif // ENABLE_MODE_BOTTLING				
 			slowdownLimit = halfStepLimit + 1;
 		}
 
@@ -693,7 +725,7 @@ void loop() {
 
 	// Save totals to eeprom
 	if (totalMotorUptime > lastTotalMotorUptime && now - lastEepromSaveTime > eepromSaveTotalsPeriodMs) {
-		eepromWriteTotals();
+		eepromWrite();
 		lastTotalMotorUptime = totalMotorUptime;
 		lastEepromSaveTime = now;
 		// Increase eeprom save period to extend cell life
@@ -760,7 +792,7 @@ void loop() {
 		case MODE_BOTTLING:
 			// don't change volume if pumping right now
 			if (halfStepLimit < 1) {
-				targetVolume += delta;
+				targetVolume += delta*bottlingIncrementFactor;
 				eepromWrite();
 			}
 			break;
@@ -805,7 +837,7 @@ void loop() {
 				stepCounter = 0;
 				halfStepLimit = (long)abs(2.0*targetVolume / ((targetVolume > 0) ? revolution2millilitreCw : revolution2millilitreCcw) * stepsPerRevolution);
 				TIMSK1 |= _BV(OCIE1B);  // enable timer compare interrupt
-				targetRpm = (targetVolume > 0) ? volumeRpm : -volumeRpm;
+				targetRpm = (targetVolume > 0) ? bottlingRpm : -bottlingRpm;
 			}
 			break;
 		#endif
@@ -879,8 +911,13 @@ void loop() {
 	case ClickEncoder::Held:
 		// don't start calibration if pumping right now or in external control mode 
 	#if ENABLE_MODE_BOTTLING
-		if (pumpMode == MODE_BOTTLING && halfStepLimit > 1)
+		if (pumpMode == MODE_BOTTLING) {
+			if(halfStepLimit < 1) 	bottlingMenu();
+			// Wait button release
+			while (encoder->getButton() == ClickEncoder::Held)
+				; // do nothing
 			break;
+		}
 	#endif
 	#if ENABLE_EXTERNAL_CONTROL
 		if (pumpMode == MODE_EXT_CONTROL)
@@ -899,12 +936,13 @@ void loop() {
 			lcd.print(F("Pump calibration"));
 			lcd.setCursor(0, 1);
 			lcd.print(F("was canceled    "));
-		}
-		lastTime = now + 1500;
+		}		
 
 		// Wait button release
 		while (encoder->getButton() == ClickEncoder::Held)
 			; // do nothing
+		
+		lastTime = millis() + 1500;
 		break;
 	default:
 		break;
@@ -916,7 +954,7 @@ void loop() {
 		lastTime = now;
 	}
 
-	// every 10 ms change motor speed
+	// handle motor acceleration/decceleration
 	adjustMotorSpeed();
 }
 
@@ -924,6 +962,7 @@ void loop() {
 //========================================================================
 
 void adjustMotorSpeed() {
+	// every 10 ms change motor speed
 	if (speedAdjustmentTicks > 10) {
 		if (targetRpm - currentRpm > 1e-5) {
 			currentRpm += 0.01 * currentRpmRate;
@@ -939,6 +978,86 @@ void adjustMotorSpeed() {
 		speedAdjustmentTicks = 0;
 	}
 }
+
+// This function shows bottling menu, where user can choose volume & pump speed
+//===============================================================================================================
+bool bottlingMenu() {
+	int lphr = round(bottlingRpm * revolution2millilitreCw * 0.6);  // 60 / 1000 * 10
+
+	lcd.clear();
+	lcd.setCursor(0, 0);
+	lcd.print(F(" BOTTLING MENU "));
+
+
+	// Wait button release or 1.5 sec
+	const uint32_t now = millis();
+	while (encoder->getButton() == ClickEncoder::Held || millis()-now<2000)
+		; // do nothing
+
+	
+	lcd.setCursor(0, 0);
+	lcd.print(F("Bottling rate   "));
+	sprintf_P(buffer, PSTR("%3d RPM/%d.%d l/h"), bottlingRpm, lphr / 10, abs(lphr % 10));
+	lcd.setCursor(0, 1);
+	lcd.print(buffer);
+
+
+	do {
+		const int delta = encoder->getValue();
+		if (delta) {
+			bottlingRpm += delta;
+			bottlingRpm = min(bottlingRpm, maxRpm);
+			bottlingRpm = max(bottlingRpm, 1);
+
+			lphr = round(bottlingRpm * revolution2millilitreCw * 0.6);  // 60 / 1000 * 10
+			sprintf_P(buffer, PSTR("%3d RPM/%d.%d l/h"), bottlingRpm, lphr / 10, abs(lphr % 10));
+			lcd.setCursor(0, 1);
+			lcd.print(buffer);
+		}
+
+		ClickEncoder::Button  btn = encoder->getButton();
+
+		if (btn == ClickEncoder::Clicked)
+			break;
+
+		if (btn == ClickEncoder::Held) {
+			return false;
+		}
+		delay(1);
+	} while (1);
+
+	lcd.setCursor(0, 0);
+	lcd.print(F("Volume increment"));
+	int pos = sprintf_P(buffer, PSTR("%d ml"), bottlingIncrementFactor);
+	lcd.setCursor(0, 1);
+	lcd.print(buffer);
+	while (pos++ < LCD_WIDTH) lcd.write(' ');
+
+	do {
+		const int delta = encoder->getValue();
+		if (delta) {
+			bottlingIncrementFactor += delta;
+			bottlingIncrementFactor = max(1, bottlingIncrementFactor);
+
+			int pos = sprintf_P(buffer, PSTR("%d ml"), bottlingIncrementFactor);
+			lcd.setCursor(0, 1);
+			lcd.print(buffer);
+			while (pos++ < LCD_WIDTH) lcd.write(' ');
+		}
+
+		ClickEncoder::Button  btn = encoder->getButton();
+
+		if (btn == ClickEncoder::Clicked)
+			break;
+
+		if (btn == ClickEncoder::Held) {
+			return false;
+		}
+		delay(1);
+	} while (1);
+
+}
+
 
 // Pump calibration
 //===============================================================================================================
@@ -1051,7 +1170,7 @@ bool calibratePump() {
 		// Pump some water
 		halfStepLimit = 2L * revolutionNum * stepsPerRevolution;
 		TIMSK1 |= _BV(OCIE1B);  // enable timer1 compare interrupt
-		targetRpm = volumeRpm;
+		targetRpm = calibrationRpm;
 
 		lcd.setCursor(0, 0);
 		lcd.print(F("Pumping water + "));
@@ -1130,7 +1249,7 @@ bool calibratePump() {
 		// Pump some water
 		halfStepLimit = 2L * revolutionNum * stepsPerRevolution;
 		TIMSK1 |= _BV(OCIE1B);  // enable timer1 compare interrupt
-		targetRpm = -volumeRpm;
+		targetRpm = -calibrationRpm;
 
 		lcd.setCursor(0, 0);
 		lcd.print(F("Pumping water - "));
