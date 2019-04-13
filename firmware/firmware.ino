@@ -12,7 +12,7 @@ const double firmwareVersion = 2.4;
 #define DEBUG_ENABLED 0
 
 // EEPROM magic byte, increment this to clear EEPROM settings
-#define MAGIC_BYTE 19041202L
+#define MAGIC_BYTE 19041301L
 
 // Show litres per hour instead of millilitres per minute
 #define DISPLAY_LITRES_PER_HOUR 1
@@ -110,7 +110,7 @@ const int16_t   calibrationRpm = 200;		// RPM for calibration
 
 #if ENABLE_MODE_BOTTLING
 int16_t		  bottlingRpm = 200;			// RPM for bottling
-int16_t		  bottlingIncrementFactor = 1;	// When we need to pump large volume of liquid it will take too long 
+int16_t		  bottlingIncrementFactor = 10;	// When we need to pump large volume of liquid it will take too long 
 											// to rotate the encoder to set the value. This factor allows to increase
 											// the increment delta in bottling mode
 #endif
@@ -133,7 +133,7 @@ int8_t  pumpMode = 0;
 
 LiquidCrystal_I2C lcd(LCD_I2C_ADDRESS, LCD_WIDTH, LCD_HEIGHT);
 
-int16_t  targetVolume = 500;
+int32_t  bottlingVolume = 500;
 float    targetRpm = 0;
 float    lastTargetRpm = 0;
 float    currentRpm = 0;
@@ -228,7 +228,7 @@ void eepromWrite() {
 	address += eepromPut(address, revolution2millilitreCw);
 	address += eepromPut(address, revolution2millilitreCcw);
 	address += eepromPut(address, lastTargetRpm);
-	address += eepromPut(address, targetVolume);
+	address += eepromPut(address, bottlingVolume);
 #if ENABLE_MODE_BOTTLING
 	address += eepromPut(address, bottlingIncrementFactor);
 	address += eepromPut(address, bottlingRpm);
@@ -256,7 +256,7 @@ bool eepromRead() {
 	address += eepromGet(address, revolution2millilitreCw);
 	address += eepromGet(address, revolution2millilitreCcw);
 	address += eepromGet(address, lastTargetRpm);
-	address += eepromGet(address, targetVolume);
+	address += eepromGet(address, bottlingVolume);
 #if ENABLE_MODE_BOTTLING
 	address += eepromGet(address, bottlingIncrementFactor);
 	address += eepromGet(address, bottlingRpm);
@@ -589,13 +589,18 @@ void displayPumpData() {
 		if (bottlingStepLimit == 0) {
 			lcd.print(F("Bottling volume "));
 			lcd.setCursor(0, 1);
-			pos += lcd.print(targetVolume);
-			pos += lcd.print(F(" ml"));
+			if(bottlingVolume>9999) {
+				pos += lcd.print(0.001*bottlingVolume);
+				pos += lcd.print(F(" L"));
+			} else {
+				pos += lcd.print(bottlingVolume);
+				pos += lcd.print(F(" ml"));
+			}
 			while (pos++ < 16) lcd.write(32);
 		} else {
 			const int progress = int(17.0*stepCounter / bottlingStepLimit);
 			lcd.print(F("Pumping water "));
-			(targetVolume > 0) ? lcd.print(F("+ ")) : lcd.print(F("- "));
+			(bottlingVolume > 0) ? lcd.print(F("+ ")) : lcd.print(F("- "));
 			lcd.setCursor(0, 1);
 			while (pos++ < progress) lcd.write(255);
 			while (pos++ < 16) lcd.write(32);
@@ -775,7 +780,7 @@ void loop() {
 		case MODE_BOTTLING:
 			// don't change volume if pumping right now
 			if (bottlingStepLimit < 1) {
-				targetVolume += delta*bottlingIncrementFactor;
+				bottlingVolume += delta*bottlingIncrementFactor;
 				eepromWrite();
 			}
 			break;
@@ -818,9 +823,9 @@ void loop() {
 			} else {
 				currentRpmRate = rpmAccelerationRate;
 				stepCounter = 0;
-				bottlingStepLimit = (long)abs(2.0*targetVolume / ((targetVolume > 0) ? revolution2millilitreCw : revolution2millilitreCcw) * stepsPerRevolution);
+				bottlingStepLimit = (long)abs(2.0*bottlingVolume / ((bottlingVolume > 0) ? revolution2millilitreCw : revolution2millilitreCcw) * stepsPerRevolution);
 				TIMSK1 |= _BV(OCIE1B);  // enable timer compare interrupt
-				targetRpm = (targetVolume > 0) ? bottlingRpm : -bottlingRpm;
+				targetRpm = (bottlingVolume > 0) ? bottlingRpm : -bottlingRpm;
 			}
 			break;
 		#endif
