@@ -24,7 +24,7 @@ const double firmwareVersion = 2.4;
 #define ENABLE_UPTIME_CALC 1
 
 // Enable external speed control from moonshine controller, e.g. HelloDistiller
-#define ENABLE_EXTERNAL_CONTROL 0
+#define ENABLE_EXTERNAL_CONTROL 1
 
 // Choose control signal 
 #define EXT_CTRL_VIA_PWM		1   // PWM signal from pin 2(3)/interrupt 0(1), RPM = Duty*maxRpm.  Move encoder pins somewhere else.
@@ -105,7 +105,7 @@ const int8_t    microStepping = 8;
 const int16_t   maxRpm = 450;			// Upper limit, won't increase RMP above this
 const float     minRpm = 0.01;			// Lower limit, if RPM<minRpm, RPM will be set to 0
 const int16_t   rpmAccelerationRate = 50;	// RPM increase per second when user change speed
-const int16_t   rpmHaltRate = 200;		// RPM increase per second when motor halts
+const int16_t   rpmHaltRate = 200;		// RPM change per second when motor halts
 const int16_t   calibrationRpm = 200;		// RPM for calibration
 
 #if ENABLE_MODE_BOTTLING
@@ -117,9 +117,6 @@ int16_t		  bottlingIncrementFactor = 1;	// When we need to pump large volume of 
 
 const float   degreePerStep = 1.8;  // rather common value for widespread motors
 const int16_t stepsPerRevolution = 360 / degreePerStep * microStepping;
-
-const int8_t  slowdownRevolutions = 7;   // How many revolutions to the end we should slow down
-const float   slowdownFactor = 0.2;
 
 // Variables
 //================================================================================================
@@ -149,7 +146,7 @@ ClickEncoder *encoder;
 
 volatile uint8_t speedAdjustmentTicks = 0;
 volatile long stepCounter = 0;
-volatile long halfStepLimit = 0;
+volatile long bottlingStepLimit = 0;
 
 // variable for uptime counting
 uint32_t totalMotorUptime = 0;		// total motor uptime in seconds
@@ -471,29 +468,11 @@ void setup() {
 
 // stepper half step timer
 //===============================================================================================================
-long slowdownLimit = 0;
 ISR(TIMER1_COMPB_vect) {
 	stepCounter++;
-
-	// Slowdown motor when at the and of bottling or calibration
-	// We do all calculations here, since it does not affect overall performance in our case
-	if (slowdownLimit < stepCounter)
-		if (slowdownLimit == 0) {
-			slowdownLimit = halfStepLimit - 1L * slowdownRevolutions * stepsPerRevolution;
-		} else {
-		#if ENABLE_MODE_BOTTLING
-			const uint16_t rpm = (pumpMode == MODE_BOTTLING) ? bottlingRpm : calibrationRpm;
-			targetRpm = slowdownFactor * ((targetRpm > 0) ? rpm : -rpm);
-		#else
-			targetRpm = slowdownFactor * ((targetRpm > 0) ? calibrationRpm : -calibrationRpm);
-		#endif // ENABLE_MODE_BOTTLING				
-			slowdownLimit = halfStepLimit + 1;
-		}
-
-	if (halfStepLimit < stepCounter) {
-		halfStepLimit = 0;
+	if (bottlingStepLimit < stepCounter) {
+		bottlingStepLimit = 0;
 		stepCounter = 0;
-		slowdownLimit = 0;
 		setMotorSpeed(0);
 		currentRpm = targetRpm = 0;
 		TIMSK1 &= ~_BV(OCIE1B); // disable timer1 compare interrupt
@@ -540,7 +519,7 @@ void ExternalInputISR() {
 // Set motor speed
 //===============================================================================================================
 void setMotorSpeed(float rpm) {
-	if (abs(rpm) < 1e-2) {
+	if (abs(rpm) < minRpm) {
 		TCCR1B &= B11111000;
 		digitalWrite(pinStep, LOW);
 		digitalWrite(pinEnable, HIGH);
@@ -607,19 +586,23 @@ void displayPumpData() {
 		break;
 	#if ENABLE_MODE_BOTTLING
 	case MODE_BOTTLING:
-		if (halfStepLimit == 0) {
+		if (bottlingStepLimit == 0) {
 			lcd.print(F("Bottling volume "));
 			lcd.setCursor(0, 1);
 			pos += lcd.print(targetVolume);
 			pos += lcd.print(F(" ml"));
 			while (pos++ < 16) lcd.write(32);
 		} else {
-			const int progress = int(17.0*stepCounter / halfStepLimit);
+			const int progress = int(17.0*stepCounter / bottlingStepLimit);
 			lcd.print(F("Pumping water "));
 			(targetVolume > 0) ? lcd.print(F("+ ")) : lcd.print(F("- "));
 			lcd.setCursor(0, 1);
 			while (pos++ < progress) lcd.write(255);
 			while (pos++ < 16) lcd.write(32);
+			//DEBUG_PRINT("Target RPM = ");
+			//DEBUG_PRINT(targetRpm);
+			//DEBUG_PRINT(", current RPM = ");
+			//DEBUG_PRINTLN(currentRpm);
 		}
 		return;
 	#endif
@@ -791,7 +774,7 @@ void loop() {
 		#if ENABLE_MODE_BOTTLING
 		case MODE_BOTTLING:
 			// don't change volume if pumping right now
-			if (halfStepLimit < 1) {
+			if (bottlingStepLimit < 1) {
 				targetVolume += delta*bottlingIncrementFactor;
 				eepromWrite();
 			}
@@ -830,12 +813,12 @@ void loop() {
 			break;
 		#if ENABLE_MODE_BOTTLING
 		case MODE_BOTTLING:
-			if (halfStepLimit > 0) {
-				halfStepLimit = 0;
+			if (bottlingStepLimit > 0) {
+				bottlingStepLimit = 0;
 			} else {
 				currentRpmRate = rpmAccelerationRate;
 				stepCounter = 0;
-				halfStepLimit = (long)abs(2.0*targetVolume / ((targetVolume > 0) ? revolution2millilitreCw : revolution2millilitreCcw) * stepsPerRevolution);
+				bottlingStepLimit = (long)abs(2.0*targetVolume / ((targetVolume > 0) ? revolution2millilitreCw : revolution2millilitreCcw) * stepsPerRevolution);
 				TIMSK1 |= _BV(OCIE1B);  // enable timer compare interrupt
 				targetRpm = (targetVolume > 0) ? bottlingRpm : -bottlingRpm;
 			}
@@ -883,7 +866,7 @@ void loop() {
 			break;
 		#if ENABLE_MODE_BOTTLING
 		case MODE_BOTTLING:
-			if (halfStepLimit < 1) // dont switch if pumping right now
+			if (bottlingStepLimit < 1) // dont switch if pumping right now
 			#if ENABLE_EXTERNAL_CONTROL
 				pumpMode = MODE_EXT_CONTROL;
 		#else
@@ -912,7 +895,7 @@ void loop() {
 		// don't start calibration if pumping right now or in external control mode 
 	#if ENABLE_MODE_BOTTLING
 		if (pumpMode == MODE_BOTTLING) {
-			if(halfStepLimit < 1) 	bottlingMenu();
+			if(bottlingStepLimit < 1) 	bottlingMenu();
 			// Wait button release
 			while (encoder->getButton() == ClickEncoder::Held)
 				; // do nothing
@@ -949,9 +932,9 @@ void loop() {
 	} // switch (encoder->getButton())
 
 	// Update LCD twice per second
-	if (now > lastTime + ((halfStepLimit > 0) ? 100 : 500)) {
+	if (now > lastTime + ((bottlingStepLimit > 0) ? 100 : 500)) {
 		displayPumpData();
-		lastTime = now;
+		lastTime = millis();
 	}
 
 	// handle motor acceleration/decceleration
@@ -963,20 +946,29 @@ void loop() {
 
 void adjustMotorSpeed() {
 	// every 10 ms change motor speed
-	if (speedAdjustmentTicks > 10) {
-		if (targetRpm - currentRpm > 1e-5) {
-			currentRpm += 0.01 * currentRpmRate;
-			if (currentRpm > targetRpm)  currentRpm = targetRpm;
-			setMotorSpeed(currentRpm);
-		}
+	if (speedAdjustmentTicks < 10) return;
 
-		if (targetRpm - currentRpm < -1e-5) {
-			currentRpm -= 0.01 * currentRpmRate;
-			if (currentRpm < targetRpm)   currentRpm = targetRpm;
-			setMotorSpeed(currentRpm);
-		}
-		speedAdjustmentTicks = 0;
+	// Slowdown motor at the and of bottling or calibration
+	const int finalRpm = 30;
+	if (bottlingStepLimit > 0 && abs(targetRpm) > finalRpm &&
+		bottlingStepLimit - stepCounter < currentRpm*currentRpm*stepsPerRevolution / rpmHaltRate / 45) {
+		targetRpm = (targetRpm > 0) ? finalRpm : -finalRpm;
+		currentRpmRate = rpmHaltRate;
 	}
+
+	if (targetRpm - currentRpm > 1e-5) {
+		currentRpm += 0.01 * currentRpmRate;
+		if (currentRpm > targetRpm)  currentRpm = targetRpm;
+		setMotorSpeed(currentRpm);
+	}
+
+	if (targetRpm - currentRpm < -1e-5) {
+		currentRpm -= 0.01 * currentRpmRate;
+		if (currentRpm < targetRpm)   currentRpm = targetRpm;
+		setMotorSpeed(currentRpm);
+	}
+	speedAdjustmentTicks = 0;
+
 }
 
 // This function shows bottling menu, where user can choose volume & pump speed
@@ -1168,21 +1160,22 @@ bool calibratePump() {
 		lcd.print(F("                "));
 
 		// Pump some water
-		halfStepLimit = 2L * revolutionNum * stepsPerRevolution;
+		bottlingStepLimit = 2L * revolutionNum * stepsPerRevolution;
 		TIMSK1 |= _BV(OCIE1B);  // enable timer1 compare interrupt
 		targetRpm = calibrationRpm;
+		currentRpmRate = rpmAccelerationRate;
 
 		lcd.setCursor(0, 0);
 		lcd.print(F("Pumping water + "));
 
-		while (halfStepLimit > 0) {
-			const int pos = int(16.0*stepCounter / halfStepLimit);
+		while (bottlingStepLimit > 0) {
+			const int pos = int(16.0*stepCounter / bottlingStepLimit);
 			lcd.setCursor(pos, 1);
 			lcd.write(255);
 
 			ClickEncoder::Button  btn = encoder->getButton();
 			if (btn == ClickEncoder::Held || btn == ClickEncoder::DoubleClicked) {
-				halfStepLimit = 0;
+				bottlingStepLimit = 0;
 				return false;
 			}
 
@@ -1247,21 +1240,22 @@ bool calibratePump() {
 		lcd.print(F("                "));
 
 		// Pump some water
-		halfStepLimit = 2L * revolutionNum * stepsPerRevolution;
+		bottlingStepLimit = 2L * revolutionNum * stepsPerRevolution;
 		TIMSK1 |= _BV(OCIE1B);  // enable timer1 compare interrupt
 		targetRpm = -calibrationRpm;
+		currentRpmRate = rpmAccelerationRate;
 
 		lcd.setCursor(0, 0);
 		lcd.print(F("Pumping water - "));
 
-		while (halfStepLimit > 0) {
-			const int pos = int(16.0*stepCounter / halfStepLimit);
+		while (bottlingStepLimit > 0) {
+			const int pos = int(16.0*stepCounter / bottlingStepLimit);
 			lcd.setCursor(pos, 1);
 			lcd.write(255);
 
 			ClickEncoder::Button  btn = encoder->getButton();
 			if (btn == ClickEncoder::Held || btn == ClickEncoder::DoubleClicked) {
-				halfStepLimit = 0;
+				bottlingStepLimit = 0;
 				return false;
 			}
 
