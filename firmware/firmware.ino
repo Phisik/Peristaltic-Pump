@@ -90,15 +90,9 @@ const uint8_t pinSleep = 11;
 	#endif
 #endif // #if ENABLE_EXTERNAL_CONTROL
 
-#if ENABLE_EXTERNAL_CONTROL &&  EXTERNAL_CONTROL_TYPE == EXT_CTRL_VIA_PWM
-	const uint8_t pinEncoderButton = 5;
-	const uint8_t pinEncoderA  = 6;
-	const uint8_t pinEncoderB  = 7;
-#else
-	const uint8_t pinEncoderButton = 2;
-	const uint8_t pinEncoderA  = 3;
-	const uint8_t pinEncoderB  = 4;
-#endif
+const uint8_t pinEncoderButton = 5;
+const uint8_t pinEncoderA  = 6;
+const uint8_t pinEncoderB  = 7;
 
 // Speed & motor setup
 const int8_t    microStepping = 8;
