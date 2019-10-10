@@ -15,15 +15,23 @@ Additionally to pump head you will need to get some electronics:
        https://www.aliexpress.com/item/1817501276.html
     3. Arduino board. I used Arduino pro mini. ~ $2 
        https://www.aliexpress.com/item/32293707392.html
-    4. Rotary encoder with button + 2 resistors or KY-040 Encoder Module. ~ $1 https://www.aliexpress.com/item/32474584136.html
-    5. 1602 LCD with I2C converter. ~ $2 https://www.aliexpress.com/item/32836972320.html
-    6. Bearings. I used 6 pcs of 605zz bearings. ~$10 for 50 pcs https://www.aliexpress.com/item/32245721720.html
-    7. Power supply 12V 1-2A. ~$4 https://www.aliexpress.com/item/1000001113368.html
-    8. Rubber legs ~$1.5 for 20pcs https://www.aliexpress.com/item/32844587782.html
-    9. DC-DC converter ~$1.5 https://www.aliexpress.com/item/32261885063.html
-    10. 2 springs ~$0.1  https://www.aliexpress.com/item/32376023464.html
+    4. Rotary encoder with button + 2 resistors or KY-040 Encoder Module. ~ $1 
+       https://www.aliexpress.com/item/32474584136.html
+    5. 1602 LCD with I2C converter. ~ $2 
+       https://www.aliexpress.com/item/32836972320.html
+    6. Bearings. I used 6 pcs of 605zz bearings. ~$10 for 50 pcs 
+       https://www.aliexpress.com/item/32245721720.html
+    7. Power supply 12V 1-2A. ~$4 
+       https://www.aliexpress.com/item/1000001113368.html
+    8. Rubber legs ~$1.5 for 20pcs 
+       https://www.aliexpress.com/item/32844587782.html
+    9. DC-DC converter ~$1.5 
+       https://www.aliexpress.com/item/32261885063.html
+    10. 2 springs ~$0.1  
+        https://www.aliexpress.com/item/32376023464.html
+    11. Wires, screws, nuts etc.
 
-I have ordered all parts from AliExpress (links are. Total cost of the pump was about $30 including plastic for printing & elecronic components.
+I have ordered all parts from AliExpress. Links are provided as an example, you may not need 50pcs of bearings and can order only 10pcs. Total cost of the pump was about $35 including plastic for printing & other elecronic components.
 
 # SOFTWARE
 Source codes of Arduino firmware for DIY Nema motor based peristaltic pump are available in preset repository. 
