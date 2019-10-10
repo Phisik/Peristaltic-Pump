@@ -9,9 +9,12 @@ The latest STL and SCAD source files of pump head are available at https://www.t
 # HARDWARE
 Additionally to pump head you will need to get some electronics:
 
-    1. Nema stepper motor, e.g 17HS4401S. ~$8 https://www.aliexpress.com/item/32376023464.html
-    2. Stepper motor driver, e.g A4988. ~$1 https://www.aliexpress.com/item/1817501276.html
-    3. Arduino board. I used Arduino pro mini. ~ $2 https://www.aliexpress.com/item/32293707392.html
+    1. Nema stepper motor, e.g 17HS4401S. ~$8 
+       https://www.aliexpress.com/item/32376023464.html
+    2. Stepper motor driver, e.g A4988. ~$1  
+       https://www.aliexpress.com/item/1817501276.html
+    3. Arduino board. I used Arduino pro mini. ~ $2 
+       https://www.aliexpress.com/item/32293707392.html
     4. Rotary encoder with button + 2 resistors or KY-040 Encoder Module. ~ $1 https://www.aliexpress.com/item/32474584136.html
     5. 1602 LCD with I2C converter. ~ $2 https://www.aliexpress.com/item/32836972320.html
     6. Bearings. I used 6 pcs of 605zz bearings. ~$10 for 50 pcs https://www.aliexpress.com/item/32245721720.html
