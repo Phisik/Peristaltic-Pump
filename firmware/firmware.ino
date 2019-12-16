@@ -175,9 +175,9 @@ uint32_t eepromRewriteCounter = 0;  // ATMEL gives 100000 cell rewrites lifetime
 	const float extCtrlPwmFactor = 0.45;      // Correction factor for external PWM duty cycle
 
 											  // Note for HelloDistiller controller user:
-	                                          // В HelloDistiller слишком грубый шаг - 1/125. А скорость насоса максимальная большая ~65л/ч
-											  // В результате 1 шаг дает слишком большой прирост потока. Чтобы уменьшить шаг регулировки
-											  // мы будет уменьшать внешний PWM duty cycle. Максимальная скорость при этома пролучиться
+	                                          // Г‚ HelloDistiller Г±Г«ГЁГёГЄГ®Г¬ ГЈГ°ГіГЎГ»Г© ГёГ ГЈ - 1/125. ГЂ Г±ГЄГ®Г°Г®Г±ГІГј Г­Г Г±Г®Г±Г  Г¬Г ГЄГ±ГЁГ¬Г Г«ГјГ­Г Гї ГЎГ®Г«ГјГёГ Гї ~65Г«/Г·
+											  // Г‚ Г°ГҐГ§ГіГ«ГјГІГ ГІГҐ 1 ГёГ ГЈ Г¤Г ГҐГІ Г±Г«ГЁГёГЄГ®Г¬ ГЎГ®Г«ГјГёГ®Г© ГЇГ°ГЁГ°Г®Г±ГІ ГЇГ®ГІГ®ГЄГ . Г—ГІГ®ГЎГ» ГіГ¬ГҐГ­ГјГёГЁГІГј ГёГ ГЈ Г°ГҐГЈГіГ«ГЁГ°Г®ГўГЄГЁ
+											  // Г¬Г» ГЎГіГ¤ГҐГІ ГіГ¬ГҐГ­ГјГёГ ГІГј ГўГ­ГҐГёГ­ГЁГ© PWM duty cycle. ГЊГ ГЄГ±ГЁГ¬Г Г«ГјГ­Г Гї Г±ГЄГ®Г°Г®Г±ГІГј ГЇГ°ГЁ ГЅГІГ®Г¬Г  ГЇГ°Г®Г«ГіГ·ГЁГІГјГ±Гї
 											  // extCtrlPwmFactor*maxRpm
 							
 #endif
@@ -215,7 +215,9 @@ template <typename T> int eepromPut(int addr, const T &t ){
 void eepromWrite() {
 	uint32_t magic = MAGIC_BYTE; 
 	int address = 0;
+#if ENABLE_UPTIME_CALC
 	eepromRewriteCounter++;
+#endif  // !ENABLE_UPTIME_CALC
 
 	address += eepromPut(address, magic);
 	address += eepromPut(address, pumpMode);
