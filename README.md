@@ -28,7 +28,7 @@ Additionally to pump head you will need to get some electronics:
     9. DC-DC converter ~$1.5 
        https://www.aliexpress.com/item/32261885063.html
     10. 2 springs ~$0.1  
-        https://www.aliexpress.com/item/32376023464.html
+        https://aliexpress.ru/item/2053018943.html
     11. Wires, screws, nuts etc.
 
 I have ordered all parts from AliExpress. Links are provided as an example, you may not need 50pcs of bearings and can order only 10pcs. Total cost of the pump was about $35 including plastic for printing & other elecronic components.
