@@ -1,4 +1,4 @@
-#include <Wire.h>
+﻿#include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <ClickEncoder.h>
 #include <EEPROM.h>
@@ -175,9 +175,9 @@ uint32_t eepromRewriteCounter = 0;  // ATMEL gives 100000 cell rewrites lifetime
 	const float extCtrlPwmFactor = 0.45;      // Correction factor for external PWM duty cycle
 
 											  // Note for HelloDistiller controller user:
-	                                          // Â HelloDistiller ñëèøêîì ãðóáûé øàã - 1/125. À ñêîðîñòü íàñîñà ìàêñèìàëüíàÿ áîëüøàÿ ~65ë/÷
-											  // Â ðåçóëüòàòå 1 øàã äàåò ñëèøêîì áîëüøîé ïðèðîñò ïîòîêà. ×òîáû óìåíüøèòü øàã ðåãóëèðîâêè
-											  // ìû áóäåò óìåíüøàòü âíåøíèé PWM duty cycle. Ìàêñèìàëüíàÿ ñêîðîñòü ïðè ýòîìà ïðîëó÷èòüñÿ
+	                                          // В HelloDistiller слишком грубый шаг - 1/125. А скорость насоса максимальная большая ~65л/ч
+											  // В результате 1 шаг дает слишком большой прирост потока. Чтобы уменьшить шаг регулировки
+											  // мы будет уменьшать внешний PWM duty cycle. Максимальная скорость при этома пролучиться
 											  // extCtrlPwmFactor*maxRpm
 							
 #endif
@@ -316,19 +316,19 @@ void setup() {
 	// Choose microstepping
 	switch (microStepping) {
 	case 1:
-		digitalWrite(pinMS1, LOW); 		digitalWrite(pinMS2, LOW); 		digitalWrite(pinMS3, LOW);
+		digitalWrite(pinMS1, LOW); 		digitalWrite(pinMS2, LOW); 		digitalWrite(pinMS3, LOW); //A4988 1/1 (200)
 		break;
 	case 2:
-		digitalWrite(pinMS1, LOW); 		digitalWrite(pinMS2, HIGH); 	digitalWrite(pinMS3, LOW);
+		digitalWrite(pinMS1, HIGH);		digitalWrite(pinMS2, LOW); 		digitalWrite(pinMS3, LOW); //A4988 1/2 (400)
 		break;
 	case 4:
-		digitalWrite(pinMS1, LOW);		digitalWrite(pinMS2, HIGH);		digitalWrite(pinMS3, LOW);
+		digitalWrite(pinMS1, LOW);		digitalWrite(pinMS2, HIGH);		digitalWrite(pinMS3, LOW); //A4988 1/4 (800)
 		break;
 	case 8:
-		digitalWrite(pinMS1, HIGH);		digitalWrite(pinMS2, HIGH);		digitalWrite(pinMS3, LOW);
+		digitalWrite(pinMS1, HIGH);		digitalWrite(pinMS2, HIGH);		digitalWrite(pinMS3, LOW); //A4988 1/8 (1600)
 		break;
 	case 16:
-		digitalWrite(pinMS1, HIGH);		digitalWrite(pinMS2, HIGH);		digitalWrite(pinMS3, HIGH);
+		digitalWrite(pinMS1, HIGH);		digitalWrite(pinMS2, HIGH);		digitalWrite(pinMS3, HIGH); //A4988 1/16 (3200)
 		break;
 	}
 
